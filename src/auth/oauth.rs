@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use crossterm::{execute, style::{Color, Print, ResetColor, SetForegroundColor}};
+use crossterm::{
+    execute,
+    style::{Color, Print, ResetColor, SetForegroundColor},
+};
 use rand::RngCore;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

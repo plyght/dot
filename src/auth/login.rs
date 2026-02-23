@@ -1,9 +1,12 @@
-use anyhow::Result;
-use crossterm::{execute, style::{Color, Print, ResetColor, SetForegroundColor}};
-use std::io::{self};
-use super::{Credentials, ProviderCredential};
 use super::oauth::oauth_pkce_flow;
-use super::ui::{select_from_menu, read_api_key};
+use super::ui::{read_api_key, select_from_menu};
+use super::{Credentials, ProviderCredential};
+use anyhow::Result;
+use crossterm::{
+    execute,
+    style::{Color, Print, ResetColor, SetForegroundColor},
+};
+use std::io::{self};
 pub async fn login_flow() -> Result<()> {
     let mut stdout = io::stdout();
     let providers = &["Anthropic", "OpenAI"];

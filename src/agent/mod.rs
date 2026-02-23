@@ -6,13 +6,12 @@ pub use profile::AgentProfile;
 
 use events::PendingToolCall;
 
-
-use anyhow::Result;
-use tokio::sync::mpsc::UnboundedSender;
 use crate::config::Config;
 use crate::db::Db;
 use crate::provider::{ContentBlock, Message, Provider, Role, StreamEventType, Usage};
 use crate::tools::ToolRegistry;
+use anyhow::Result;
+use tokio::sync::mpsc::UnboundedSender;
 
 const COMPACT_CONTEXT_LIMIT: u32 = 200_000;
 const COMPACT_THRESHOLD: f32 = 0.8;

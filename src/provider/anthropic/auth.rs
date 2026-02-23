@@ -2,7 +2,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
-
 pub enum AnthropicAuth {
     ApiKey(String),
     OAuth {
