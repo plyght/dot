@@ -23,10 +23,15 @@ A terminal-native AI coding agent with tool execution, MCP support, and persiste
 ## Install
 
 ```bash
+cargo install dot-ai
+```
+
+Or from source:
+
+```bash
 git clone https://github.com/plyght/dot.git
 cd dot
-cargo build --release
-sudo cp target/release/dot /usr/local/bin/
+cargo install --path .
 ```
 
 ## Setup

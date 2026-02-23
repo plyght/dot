@@ -1,7 +1,22 @@
 [package]
-name = "dot"
+name = "dot-ai"
 version = "0.1.0"
 edition = "2024"
+description = "A minimal AI agent that lives in your terminal"
+license = "MIT"
+repository = "https://github.com/plyght/dot"
+homepage = "https://github.com/plyght/dot"
+readme = "README.md"
+keywords = ["ai", "agent", "tui", "cli", "llm"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "dot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dot"
+path = "src/main.rs"
 
 [dependencies]
 # Async runtime
