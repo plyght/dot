@@ -1,6 +1,4 @@
 <div align="center">
-    <br/>
-    <br/>
     <h3>dot</h3>
     <p>A minimal AI agent that lives in your terminal</p>
     <br/>
