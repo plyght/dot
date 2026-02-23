@@ -1,4 +1,9 @@
-use std::{collections::HashMap, future::Future, pin::Pin, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::Context;
 use futures::StreamExt;
@@ -69,7 +74,11 @@ impl AnthropicProvider {
                 header_value: key.clone(),
                 is_oauth: false,
             }),
-            AnthropicAuth::OAuth { access_token, refresh_token, expires_at } => {
+            AnthropicAuth::OAuth {
+                access_token,
+                refresh_token,
+                expires_at,
+            } => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -79,7 +88,12 @@ impl AnthropicProvider {
                     let rt = refresh_token.clone();
                     match refresh_oauth_token(&self.client, &rt).await {
                         Ok((new_token, new_expires_at)) => {
-                            if let AnthropicAuth::OAuth { access_token, expires_at, .. } = &mut *auth {
+                            if let AnthropicAuth::OAuth {
+                                access_token,
+                                expires_at,
+                                ..
+                            } = &mut *auth
+                            {
                                 *access_token = new_token.clone();
                                 *expires_at = new_expires_at;
                             }
@@ -131,7 +145,10 @@ async fn refresh_oauth_token(
         return Err(anyhow::anyhow!("OAuth refresh failed {status}: {body}"));
     }
 
-    let data: serde_json::Value = resp.json().await.context("Failed to parse OAuth refresh response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse OAuth refresh response")?;
     let access_token = data["access_token"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No access_token in refresh response"))?
@@ -171,7 +188,11 @@ fn convert_content_block(block: &ContentBlock) -> serde_json::Value {
             "name": name,
             "input": input,
         }),
-        ContentBlock::ToolResult { tool_use_id, content, is_error } => serde_json::json!({
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => serde_json::json!({
             "type": "tool_result",
             "tool_use_id": tool_use_id,
             "content": content,
@@ -323,17 +344,14 @@ async fn process_sse_stream(
 
                             match delta_type {
                                 "text_delta" => {
-                                    let text =
-                                        delta["text"].as_str().unwrap_or("").to_string();
+                                    let text = delta["text"].as_str().unwrap_or("").to_string();
                                     if !text.is_empty() {
                                         send!(StreamEventType::TextDelta(text));
                                     }
                                 }
                                 "input_json_delta" => {
-                                    let partial = delta["partial_json"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string();
+                                    let partial =
+                                        delta["partial_json"].as_str().unwrap_or("").to_string();
                                     if !partial.is_empty() {
                                         send!(StreamEventType::ToolUseInputDelta(partial));
                                     }
@@ -357,16 +375,15 @@ async fn process_sse_stream(
                         }
 
                         "message_delta" => {
-                            let stop_reason_str = json["delta"]["stop_reason"]
-                                .as_str()
-                                .unwrap_or("end_turn");
+                            let stop_reason_str =
+                                json["delta"]["stop_reason"].as_str().unwrap_or("end_turn");
                             let stop_reason = stop_reason_from_str(stop_reason_str);
                             let output_tokens =
                                 json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
-                            let cache_creation = json["usage"]
-                                ["cache_creation_input_tokens"]
+                            let cache_creation = json["usage"]["cache_creation_input_tokens"]
                                 .as_u64()
-                                .unwrap_or(0) as u32;
+                                .unwrap_or(0)
+                                as u32;
                             let cache_read = json["usage"]["cache_read_input_tokens"]
                                 .as_u64()
                                 .unwrap_or(0) as u32;
@@ -418,18 +435,19 @@ impl Provider for AnthropicProvider {
         &self.model
     }
 
-
     fn set_model(&mut self, model: String) {
         self.model = model;
     }
 
     fn available_models(&self) -> Vec<String> {
         let cache = self.cached_models.blocking_lock();
-        cache.clone().unwrap_or_else(|| vec![
-            "claude-sonnet-4-20250514".to_string(),
-            "claude-opus-4-20250514".to_string(),
-            "claude-haiku-4-20250414".to_string(),
-        ])
+        cache.clone().unwrap_or_else(|| {
+            vec![
+                "claude-sonnet-4-20250514".to_string(),
+                "claude-opus-4-20250514".to_string(),
+                "claude-haiku-4-20250414".to_string(),
+            ]
+        })
     }
 
     fn fetch_models(
@@ -460,7 +478,10 @@ impl Provider for AnthropicProvider {
                     .header("user-agent", "claude-code/2.1.49 (external, cli)");
             }
 
-            let resp = req.send().await.context("Failed to fetch Anthropic models")?;
+            let resp = req
+                .send()
+                .await
+                .context("Failed to fetch Anthropic models")?;
 
             if !resp.status().is_success() {
                 let status = resp.status();

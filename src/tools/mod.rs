@@ -23,9 +23,36 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
+    pub fn register_many(&mut self, tools: Vec<Box<dyn Tool>>) {
+        self.tools.extend(tools);
+    }
+
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .iter()
+            .map(|t| ToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
+            })
+            .collect()
+    }
+
+    /// Return tool definitions filtered by an allow/deny map.
+    /// If the map is empty, all tools are returned. Otherwise, tools
+    /// explicitly set to `false` are excluded.
+    pub fn definitions_filtered(
+        &self,
+        filter: &std::collections::HashMap<String, bool>,
+    ) -> Vec<ToolDefinition> {
+        if filter.is_empty() {
+            return self.definitions();
+        }
+        self.tools
+            .iter()
+            .filter(|t| {
+                filter.get(t.name()).copied().unwrap_or(true)
+            })
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
@@ -42,6 +69,10 @@ impl ToolRegistry {
             }
         }
         anyhow::bail!("Unknown tool: {}", name)
+    }
+
+    pub fn tool_count(&self) -> usize {
+        self.tools.len()
     }
 
     pub fn default_tools() -> Self {

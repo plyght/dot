@@ -2,6 +2,7 @@ use std::{collections::HashMap, future::Future, pin::Pin};
 
 use anyhow::Context;
 use async_openai::{
+    Client,
     config::OpenAIConfig,
     types::{
         ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
@@ -9,10 +10,9 @@ use async_openai::{
         ChatCompletionRequestSystemMessage, ChatCompletionRequestSystemMessageContent,
         ChatCompletionRequestToolMessage, ChatCompletionRequestToolMessageContent,
         ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
-        ChatCompletionTool, ChatCompletionToolType, CreateChatCompletionRequest,
-        FinishReason, FunctionCall, FunctionObject,
+        ChatCompletionTool, ChatCompletionToolType, CreateChatCompletionRequest, FinishReason,
+        FunctionCall, FunctionObject,
     },
-    Client,
 };
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -88,7 +88,11 @@ fn convert_messages(
                 for block in &msg.content {
                     match block {
                         ContentBlock::Text(t) => texts.push(t.clone()),
-                        ContentBlock::ToolResult { tool_use_id, content, .. } => {
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            ..
+                        } => {
                             tool_results.push((tool_use_id.clone(), content.clone()));
                         }
                         _ => {}
@@ -129,8 +133,7 @@ fn convert_messages(
                                 r#type: ChatCompletionToolType::Function,
                                 function: FunctionCall {
                                     name: name.clone(),
-                                    arguments: serde_json::to_string(input)
-                                        .unwrap_or_default(),
+                                    arguments: serde_json::to_string(input).unwrap_or_default(),
                                 },
                             });
                         }
@@ -213,21 +216,22 @@ impl Provider for OpenAIProvider {
         &self.model
     }
 
-
     fn set_model(&mut self, model: String) {
         self.model = model;
     }
 
     fn available_models(&self) -> Vec<String> {
         let cache = self.cached_models.blocking_lock();
-        cache.clone().unwrap_or_else(|| vec![
-            "gpt-4o".to_string(),
-            "gpt-4o-mini".to_string(),
-            "gpt-4-turbo".to_string(),
-            "o1".to_string(),
-            "o1-mini".to_string(),
-            "o3-mini".to_string(),
-        ])
+        cache.clone().unwrap_or_else(|| {
+            vec![
+                "gpt-4o".to_string(),
+                "gpt-4o-mini".to_string(),
+                "gpt-4-turbo".to_string(),
+                "o1".to_string(),
+                "o1-mini".to_string(),
+                "o3-mini".to_string(),
+            ]
+        })
     }
 
     fn fetch_models(
@@ -251,7 +255,10 @@ impl Provider for OpenAIProvider {
                         .into_iter()
                         .map(|m| m.id)
                         .filter(|id| {
-                            id.starts_with("gpt-") || id.starts_with("o1") || id.starts_with("o3") || id.starts_with("o4")
+                            id.starts_with("gpt-")
+                                || id.starts_with("o1")
+                                || id.starts_with("o3")
+                                || id.starts_with("o4")
                         })
                         .collect();
                     models.sort();
@@ -279,8 +286,9 @@ impl Provider for OpenAIProvider {
         system: Option<&str>,
         tools: &[ToolDefinition],
         max_tokens: u32,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<mpsc::UnboundedReceiver<StreamEvent>>> + Send + '_>>
-    {
+    ) -> Pin<
+        Box<dyn Future<Output = anyhow::Result<mpsc::UnboundedReceiver<StreamEvent>>> + Send + '_>,
+    > {
         let messages = messages.to_vec();
         let system = system.map(String::from);
         let tools = tools.to_vec();
@@ -288,8 +296,8 @@ impl Provider for OpenAIProvider {
         let client = self.client.clone();
 
         Box::pin(async move {
-            let converted_messages =
-                convert_messages(&messages, system.as_deref()).context("Failed to convert messages")?;
+            let converted_messages = convert_messages(&messages, system.as_deref())
+                .context("Failed to convert messages")?;
             let converted_tools = convert_tools(&tools);
 
             let request = CreateChatCompletionRequest {
@@ -342,7 +350,10 @@ impl Provider for OpenAIProvider {
                                 if let Some(reason) = &choice.finish_reason {
                                     final_stop_reason = Some(map_finish_reason(reason));
 
-                                    if matches!(reason, FinishReason::ToolCalls | FinishReason::FunctionCall) {
+                                    if matches!(
+                                        reason,
+                                        FinishReason::ToolCalls | FinishReason::FunctionCall
+                                    ) {
                                         for (_, accum) in &tool_accum {
                                             if accum.started {
                                                 let _ = tx_clone.send(StreamEvent {
@@ -402,9 +413,13 @@ impl Provider for OpenAIProvider {
                                             if let Some(args) = func.arguments {
                                                 if !args.is_empty() {
                                                     entry.arguments.push_str(&args);
-                                                    let _ = tx_clone.send(StreamEvent {
-                                                        event_type: StreamEventType::ToolUseInputDelta(args),
-                                                    });
+                                                    let _ =
+                                                        tx_clone.send(StreamEvent {
+                                                            event_type:
+                                                                StreamEventType::ToolUseInputDelta(
+                                                                    args,
+                                                                ),
+                                                        });
                                                 }
                                             }
                                         }

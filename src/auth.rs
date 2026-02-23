@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use anyhow::{Context, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
@@ -62,8 +62,7 @@ impl Credentials {
     pub fn load() -> Result<Self> {
         let path = Self::path();
         if path.exists() {
-            let content = std::fs::read_to_string(&path)
-                .context("reading credentials file")?;
+            let content = std::fs::read_to_string(&path).context("reading credentials file")?;
             serde_json::from_str(&content).context("parsing credentials file")
         } else {
             Ok(Self::default())
@@ -108,7 +107,6 @@ fn generate_pkce() -> (String, String) {
 
     (verifier, challenge)
 }
-
 
 fn clear_and_header(stdout: &mut impl Write) -> Result<()> {
     execute!(
@@ -275,10 +273,7 @@ fn read_api_key(prompt: &str) -> Result<String> {
     Ok(trimmed)
 }
 
-async fn exchange_code_for_token(
-    code: &str,
-    verifier: &str,
-) -> Result<OAuthTokenResponse> {
+async fn exchange_code_for_token(code: &str, verifier: &str) -> Result<OAuthTokenResponse> {
     let (actual_code, state) = code.split_once('#').unwrap_or((code, ""));
 
     let body = serde_json::json!({
@@ -325,7 +320,10 @@ async fn create_api_key_from_token(access_token: &str) -> Result<String> {
         return Err(anyhow!("API key creation failed ({}): {}", status, body));
     }
 
-    let body: serde_json::Value = response.json().await.context("parsing create-api-key response")?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("parsing create-api-key response")?;
 
     let key = body["raw_key"]
         .as_str()
@@ -345,8 +343,7 @@ async fn oauth_pkce_flow(create_key: bool) -> Result<ProviderCredential> {
         ANTHROPIC_AUTH_URL_MAX
     };
     let auth_url = {
-        let mut u = url::Url::parse(auth_base)
-            .context("parsing auth URL")?;
+        let mut u = url::Url::parse(auth_base).context("parsing auth URL")?;
         u.query_pairs_mut()
             .append_pair("code", "true")
             .append_pair("client_id", ANTHROPIC_CLIENT_ID)
@@ -448,7 +445,8 @@ pub async fn login_flow() -> Result<()> {
                 "Create API Key  (OAuth + auto-generate key)",
                 "Enter API Key   (paste key manually)",
             ];
-            let method_idx = match select_from_menu("Anthropic — authentication method", methods)? {
+            let method_idx = match select_from_menu("Anthropic — authentication method", methods)?
+            {
                 Some(i) => i,
                 None => {
                     execute!(stdout, Print("  Cancelled.\r\n"))?;

@@ -11,4 +11,6 @@ pub struct Cli {
 pub enum Commands {
     Login,
     Config,
+    /// List configured MCP servers and their tools
+    Mcp,
 }

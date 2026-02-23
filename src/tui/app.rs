@@ -1,17 +1,16 @@
+use std::time::Instant;
+
+use ratatui::layout::Rect;
+
 use crate::agent::AgentEvent;
 use crate::tui::theme::Theme;
+use crate::tui::tools::{ToolCallDisplay, ToolCategory, extract_tool_detail};
+use crate::tui::widgets::{AgentSelector, CommandPalette, ModelSelector};
 
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
     pub tool_calls: Vec<ToolCallDisplay>,
-}
-
-pub struct ToolCallDisplay {
-    pub name: String,
-    pub input: String,
-    pub output: Option<String>,
-    pub is_error: bool,
 }
 
 pub struct TokenUsage {
@@ -36,143 +35,14 @@ pub enum AppMode {
     Insert,
 }
 
-
-pub struct ModelSelector {
-    pub visible: bool,
-    pub models: Vec<String>,
-    pub selected: usize,
-}
-
-impl ModelSelector {
-    pub fn new() -> Self {
-        Self {
-            visible: false,
-            models: Vec::new(),
-            selected: 0,
-        }
-    }
-
-    pub fn open(&mut self, models: Vec<String>, current: &str) {
-        self.selected = models.iter().position(|m| m == current).unwrap_or(0);
-        self.models = models;
-        self.visible = true;
-    }
-
-    pub fn close(&mut self) {
-        self.visible = false;
-    }
-
-    pub fn up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    pub fn down(&mut self) {
-        if self.selected + 1 < self.models.len() {
-            self.selected += 1;
-        }
-    }
-
-    pub fn confirm(&mut self) -> Option<String> {
-        if self.visible {
-            self.visible = false;
-            self.models.get(self.selected).cloned()
-        } else {
-            None
-        }
-    }
-}
-
-
-pub struct SlashCommand {
-    pub name: &'static str,
-    pub aliases: &'static [&'static str],
-    pub description: &'static str,
-}
-
-pub const COMMANDS: &[SlashCommand] = &[
-    SlashCommand {
-        name: "model",
-        aliases: &["m"],
-        description: "switch model",
-    },
-    SlashCommand {
-        name: "clear",
-        aliases: &["cl"],
-        description: "clear conversation",
-    },
-    SlashCommand {
-        name: "help",
-        aliases: &["h"],
-        description: "show commands",
-    },
-];
-
-pub struct CommandPalette {
-    pub visible: bool,
-    pub selected: usize,
-    pub filtered: Vec<usize>,
-}
-
-impl CommandPalette {
-    pub fn new() -> Self {
-        Self {
-            visible: false,
-            selected: 0,
-            filtered: Vec::new(),
-        }
-    }
-
-    pub fn update_filter(&mut self, input: &str) {
-        let query = input.strip_prefix('/').unwrap_or(input).to_lowercase();
-        self.filtered = COMMANDS
-            .iter()
-            .enumerate()
-            .filter(|(_, cmd)| {
-                if query.is_empty() {
-                    return true;
-                }
-                cmd.name.starts_with(&query)
-                    || cmd.aliases.iter().any(|a| a.starts_with(&query))
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
-        }
-    }
-
-    pub fn open(&mut self, input: &str) {
-        self.visible = true;
-        self.selected = 0;
-        self.update_filter(input);
-    }
-
-    pub fn close(&mut self) {
-        self.visible = false;
-    }
-
-    pub fn up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    pub fn down(&mut self) {
-        if self.selected + 1 < self.filtered.len() {
-            self.selected += 1;
-        }
-    }
-
-    pub fn confirm(&mut self) -> Option<&'static str> {
-        if self.visible && !self.filtered.is_empty() {
-            self.visible = false;
-            Some(COMMANDS[self.filtered[self.selected]].name)
-        } else {
-            None
-        }
-    }
+#[derive(Default)]
+pub struct LayoutRects {
+    pub header: Rect,
+    pub messages: Rect,
+    pub input: Rect,
+    pub status: Rect,
+    pub model_selector: Option<Rect>,
+    pub command_palette: Option<Rect>,
 }
 
 pub struct App {
@@ -188,18 +58,28 @@ pub struct App {
     pub usage: TokenUsage,
     pub model_name: String,
     pub provider_name: String,
+    pub agent_name: String,
     pub theme: Theme,
+    pub tick_count: u64,
+    pub layout: LayoutRects,
 
     pub pending_tool_name: Option<String>,
     pub pending_tool_input: String,
     pub current_tool_calls: Vec<ToolCallDisplay>,
     pub error_message: Option<String>,
     pub model_selector: ModelSelector,
+    pub agent_selector: AgentSelector,
     pub command_palette: CommandPalette,
+    pub streaming_started: Option<Instant>,
 }
 
 impl App {
-    pub fn new(model_name: String, provider_name: String) -> Self {
+    pub fn new(
+        model_name: String,
+        provider_name: String,
+        agent_name: String,
+        theme_name: &str,
+    ) -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -213,14 +93,24 @@ impl App {
             usage: TokenUsage::default(),
             model_name,
             provider_name,
-            theme: Theme::default(),
+            agent_name,
+            theme: Theme::from_config(theme_name),
+            tick_count: 0,
+            layout: LayoutRects::default(),
             pending_tool_name: None,
             pending_tool_input: String::new(),
             current_tool_calls: Vec::new(),
             error_message: None,
             model_selector: ModelSelector::new(),
+            agent_selector: AgentSelector::new(),
             command_palette: CommandPalette::new(),
+            streaming_started: None,
         }
+    }
+
+    pub fn streaming_elapsed_secs(&self) -> Option<f64> {
+        self.streaming_started
+            .map(|start| start.elapsed().as_secs_f64())
     }
 
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
@@ -261,22 +151,28 @@ impl App {
                 ..
             } => {
                 let input = std::mem::take(&mut self.pending_tool_input);
+                let category = ToolCategory::from_name(&name);
+                let detail = extract_tool_detail(&name, &input);
                 self.current_tool_calls.push(ToolCallDisplay {
                     name: name.clone(),
                     input,
                     output: Some(output),
                     is_error,
+                    category,
+                    detail,
                 });
                 self.pending_tool_name = None;
             }
             AgentEvent::Done { usage } => {
                 self.is_streaming = false;
+                self.streaming_started = None;
                 self.usage.input_tokens += usage.input_tokens;
                 self.usage.output_tokens += usage.output_tokens;
                 self.scroll_to_bottom();
             }
             AgentEvent::Error(msg) => {
                 self.is_streaming = false;
+                self.streaming_started = None;
                 self.error_message = Some(msg);
             }
         }
@@ -295,6 +191,7 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
         self.is_streaming = true;
+        self.streaming_started = Some(Instant::now());
         self.current_response.clear();
         self.current_tool_calls.clear();
         self.error_message = None;

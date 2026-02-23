@@ -51,11 +51,17 @@ pub struct StreamEvent {
 #[derive(Debug, Clone)]
 pub enum StreamEventType {
     TextDelta(String),
-    ToolUseStart { id: String, name: String },
+    ToolUseStart {
+        id: String,
+        name: String,
+    },
     ToolUseInputDelta(String),
     ToolUseEnd,
     MessageStart,
-    MessageEnd { stop_reason: StopReason, usage: Usage },
+    MessageEnd {
+        stop_reason: StopReason,
+        usage: Usage,
+    },
     Error(String),
 }
 
