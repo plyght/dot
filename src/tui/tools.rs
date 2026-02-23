@@ -93,14 +93,8 @@ pub fn extract_tool_detail(name: &str, input: &str) -> String {
             .map(shorten_path)
             .unwrap_or_default(),
         "search_files" => {
-            let pattern = val
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let path = val
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let pattern = val.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            let path = val.get("path").and_then(|v| v.as_str()).unwrap_or("");
             if path.is_empty() {
                 format!("\"{}\"", pattern)
             } else {
@@ -124,9 +118,10 @@ pub fn extract_tool_detail(name: &str, input: &str) -> String {
             .unwrap_or("")
             .to_string(),
         _ => {
-            if let Some(first_str) = val.as_object().and_then(|o| {
-                o.values().find_map(|v| v.as_str().map(|s| s.to_string()))
-            }) {
+            if let Some(first_str) = val
+                .as_object()
+                .and_then(|o| o.values().find_map(|v| v.as_str().map(|s| s.to_string())))
+            {
                 if first_str.len() > 50 {
                     format!("{}...", &first_str[..47])
                 } else {

@@ -3,6 +3,43 @@ use ratatui::text::{Line, Span};
 
 use crate::tui::theme::Theme;
 
+fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut result: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        if raw.is_empty() {
+            result.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        let mut current_len: usize = 0;
+        for word in raw.split_whitespace() {
+            let word_len = word.chars().count();
+            if current.is_empty() {
+                current.push_str(word);
+                current_len = word_len;
+            } else if current_len + 1 + word_len <= max_width {
+                current.push(' ');
+                current.push_str(word);
+                current_len += 1 + word_len;
+            } else {
+                result.push(std::mem::take(&mut current));
+                current.push_str(word);
+                current_len = word_len;
+            }
+        }
+        if !current.is_empty() {
+            result.push(current);
+        }
+    }
+    if result.is_empty() {
+        result.push(String::new());
+    }
+    result
+}
+
 pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
@@ -56,10 +93,22 @@ pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'stati
             ]));
         } else if raw_line.starts_with("- ") || raw_line.starts_with("* ") {
             let content = &raw_line[2..];
-            let spans = parse_inline(content, theme);
-            let mut full = vec![Span::styled("  · ", theme.list_bullet)];
-            full.extend(spans);
-            lines.push(Line::from(full));
+            let prefix_len = 4usize;
+            let wrap_w = (width as usize).saturating_sub(prefix_len);
+            let sub_lines = word_wrap(content, wrap_w);
+            for (i, sub) in sub_lines.into_iter().enumerate() {
+                if i == 0 {
+                    let spans = parse_inline(&sub, theme);
+                    let mut full = vec![Span::styled("  \u{00b7} ", theme.list_bullet)];
+                    full.extend(spans);
+                    lines.push(Line::from(full));
+                } else {
+                    let spans = parse_inline(&sub, theme);
+                    let mut full = vec![Span::raw("    ")];
+                    full.extend(spans);
+                    lines.push(Line::from(full));
+                }
+            }
         } else if raw_line
             .chars()
             .next()
@@ -70,19 +119,35 @@ pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'stati
             if let Some(pos) = raw_line.find(". ") {
                 let num = &raw_line[..pos + 2];
                 let content = &raw_line[pos + 2..];
-                let spans = parse_inline(content, theme);
-                let mut full = vec![Span::styled(format!("  {} ", num), theme.list_bullet)];
-                full.extend(spans);
-                lines.push(Line::from(full));
+                let prefix_len = num.chars().count() + 3;
+                let wrap_w = (width as usize).saturating_sub(prefix_len);
+                let sub_lines = word_wrap(content, wrap_w);
+                let indent = " ".repeat(prefix_len);
+                for (i, sub) in sub_lines.into_iter().enumerate() {
+                    if i == 0 {
+                        let spans = parse_inline(&sub, theme);
+                        let mut full = vec![Span::styled(format!("  {} ", num), theme.list_bullet)];
+                        full.extend(spans);
+                        lines.push(Line::from(full));
+                    } else {
+                        let spans = parse_inline(&sub, theme);
+                        let mut full = vec![Span::raw(indent.clone())];
+                        full.extend(spans);
+                        lines.push(Line::from(full));
+                    }
+                }
             }
         } else if raw_line.trim() == "---" || raw_line.trim() == "***" {
             lines.push(Line::from(Span::styled(
-                "─".repeat(width.saturating_sub(4) as usize),
+                "\u{2500}".repeat(width.saturating_sub(4) as usize),
                 theme.border,
             )));
         } else {
-            let spans = parse_inline(raw_line, theme);
-            lines.push(Line::from(spans));
+            let sub_lines = word_wrap(raw_line, width as usize);
+            for sub in sub_lines {
+                let spans = parse_inline(&sub, theme);
+                lines.push(Line::from(spans));
+            }
         }
     }
 

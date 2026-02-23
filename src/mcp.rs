@@ -328,11 +328,7 @@ impl McpManager {
         for client in &self.clients {
             match client.list_tools() {
                 Ok(tool_defs) => {
-                    tracing::info!(
-                        "MCP '{}': {} tools",
-                        client.server_name(),
-                        tool_defs.len()
-                    );
+                    tracing::info!("MCP '{}': {} tools", client.server_name(), tool_defs.len());
                     for td in &tool_defs {
                         tools.push(Box::new(McpToolBridge::new(
                             client.clone(),

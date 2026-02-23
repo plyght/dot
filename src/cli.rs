@@ -5,6 +5,13 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
+
+    #[arg(
+        short = 's',
+        long = "session",
+        help = "resume a previous session by id"
+    )]
+    pub session: Option<String>,
 }
 
 #[derive(Subcommand)]

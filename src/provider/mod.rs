@@ -34,6 +34,10 @@ pub enum ContentBlock {
         content: String,
         is_error: bool,
     },
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +55,11 @@ pub struct StreamEvent {
 #[derive(Debug, Clone)]
 pub enum StreamEventType {
     TextDelta(String),
+    ThinkingDelta(String),
+    ThinkingComplete {
+        thinking: String,
+        signature: String,
+    },
     ToolUseStart {
         id: String,
         name: String,
@@ -95,5 +104,6 @@ pub trait Provider: Send + Sync {
         system: Option<&str>,
         tools: &[ToolDefinition],
         max_tokens: u32,
+        thinking_budget: u32,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<UnboundedReceiver<StreamEvent>>> + Send + '_>>;
 }

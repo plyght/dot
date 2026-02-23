@@ -5,12 +5,15 @@ use ratatui::layout::Rect;
 use crate::agent::AgentEvent;
 use crate::tui::theme::Theme;
 use crate::tui::tools::{ToolCallDisplay, ToolCategory, extract_tool_detail};
-use crate::tui::widgets::{AgentSelector, CommandPalette, ModelSelector};
+use crate::tui::widgets::{
+    AgentSelector, CommandPalette, ModelSelector, SessionSelector, ThinkingLevel, ThinkingSelector,
+};
 
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
     pub tool_calls: Vec<ToolCallDisplay>,
+    pub thinking: Option<String>,
 }
 
 pub struct TokenUsage {
@@ -43,6 +46,8 @@ pub struct LayoutRects {
     pub status: Rect,
     pub model_selector: Option<Rect>,
     pub command_palette: Option<Rect>,
+    pub thinking_selector: Option<Rect>,
+    pub session_selector: Option<Rect>,
 }
 
 pub struct App {
@@ -53,6 +58,7 @@ pub struct App {
     pub max_scroll: u16,
     pub is_streaming: bool,
     pub current_response: String,
+    pub current_thinking: String,
     pub should_quit: bool,
     pub mode: AppMode,
     pub usage: TokenUsage,
@@ -70,7 +76,14 @@ pub struct App {
     pub model_selector: ModelSelector,
     pub agent_selector: AgentSelector,
     pub command_palette: CommandPalette,
+    pub thinking_selector: ThinkingSelector,
+    pub session_selector: SessionSelector,
     pub streaming_started: Option<Instant>,
+
+    pub thinking_expanded: bool,
+    pub thinking_budget: u32,
+    pub last_escape_time: Option<Instant>,
+    pub follow_bottom: bool,
 }
 
 impl App {
@@ -88,6 +101,7 @@ impl App {
             max_scroll: 0,
             is_streaming: false,
             current_response: String::new(),
+            current_thinking: String::new(),
             should_quit: false,
             mode: AppMode::Insert,
             usage: TokenUsage::default(),
@@ -104,7 +118,13 @@ impl App {
             model_selector: ModelSelector::new(),
             agent_selector: AgentSelector::new(),
             command_palette: CommandPalette::new(),
+            thinking_selector: ThinkingSelector::new(),
+            session_selector: SessionSelector::new(),
             streaming_started: None,
+            thinking_expanded: false,
+            thinking_budget: 0,
+            last_escape_time: None,
+            follow_bottom: true,
         }
     }
 
@@ -113,10 +133,17 @@ impl App {
             .map(|start| start.elapsed().as_secs_f64())
     }
 
+    pub fn thinking_level(&self) -> ThinkingLevel {
+        ThinkingLevel::from_budget(self.thinking_budget)
+    }
+
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::TextDelta(text) => {
                 self.current_response.push_str(&text);
+            }
+            AgentEvent::ThinkingDelta(text) => {
+                self.current_thinking.push_str(&text);
             }
             AgentEvent::TextComplete(text) => {
                 if !text.is_empty() || !self.current_response.is_empty() {
@@ -125,13 +152,20 @@ impl App {
                     } else {
                         self.current_response.clone()
                     };
+                    let thinking = if self.current_thinking.is_empty() {
+                        None
+                    } else {
+                        Some(self.current_thinking.clone())
+                    };
                     self.messages.push(ChatMessage {
                         role: "assistant".to_string(),
                         content,
                         tool_calls: std::mem::take(&mut self.current_tool_calls),
+                        thinking,
                     });
                 }
                 self.current_response.clear();
+                self.current_thinking.clear();
             }
             AgentEvent::ToolCallStart { name, .. } => {
                 self.pending_tool_name = Some(name);
@@ -168,12 +202,29 @@ impl App {
                 self.streaming_started = None;
                 self.usage.input_tokens += usage.input_tokens;
                 self.usage.output_tokens += usage.output_tokens;
-                self.scroll_to_bottom();
             }
             AgentEvent::Error(msg) => {
                 self.is_streaming = false;
                 self.streaming_started = None;
                 self.error_message = Some(msg);
+            }
+            AgentEvent::Compacting => {
+                self.messages.push(ChatMessage {
+                    role: "compact".to_string(),
+                    content: "\u{26a1} compacting context\u{2026}".to_string(),
+                    tool_calls: Vec::new(),
+                    thinking: None,
+                });
+            }
+            AgentEvent::Compacted { messages_removed } => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == "compact" {
+                        last.content = format!(
+                            "\u{26a1} compacted \u{2014} {} messages summarized",
+                            messages_removed
+                        );
+                    }
+                }
             }
         }
     }
@@ -187,12 +238,14 @@ impl App {
             role: "user".to_string(),
             content: trimmed.clone(),
             tool_calls: Vec::new(),
+            thinking: None,
         });
         self.input.clear();
         self.cursor_pos = 0;
         self.is_streaming = true;
         self.streaming_started = Some(Instant::now());
         self.current_response.clear();
+        self.current_thinking.clear();
         self.current_tool_calls.clear();
         self.error_message = None;
         self.scroll_to_bottom();
@@ -200,27 +253,35 @@ impl App {
     }
 
     pub fn scroll_up(&mut self, n: u16) {
+        self.follow_bottom = false;
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }
 
     pub fn scroll_down(&mut self, n: u16) {
         self.scroll_offset = (self.scroll_offset + n).min(self.max_scroll);
+        if self.scroll_offset >= self.max_scroll {
+            self.follow_bottom = true;
+        }
     }
 
     pub fn scroll_to_top(&mut self) {
+        self.follow_bottom = false;
         self.scroll_offset = 0;
     }
 
     pub fn scroll_to_bottom(&mut self) {
+        self.follow_bottom = true;
         self.scroll_offset = self.max_scroll;
     }
 
     pub fn clear_conversation(&mut self) {
         self.messages.clear();
         self.current_response.clear();
+        self.current_thinking.clear();
         self.current_tool_calls.clear();
         self.scroll_offset = 0;
         self.max_scroll = 0;
+        self.follow_bottom = true;
         self.usage = TokenUsage::default();
         self.error_message = None;
     }

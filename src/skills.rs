@@ -176,19 +176,22 @@ impl Tool for SkillTool {
             .as_str()
             .context("Missing required parameter 'name'")?;
 
-        let info = self.skills.iter().find(|s| s.name == name).with_context(|| {
-            format!(
-                "Unknown skill '{}'. Available: {}",
-                name,
-                self.skills
-                    .iter()
-                    .map(|s| s.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })?;
+        let info = self
+            .skills
+            .iter()
+            .find(|s| s.name == name)
+            .with_context(|| {
+                format!(
+                    "Unknown skill '{}'. Available: {}",
+                    name,
+                    self.skills
+                        .iter()
+                        .map(|s| s.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
 
-        fs::read_to_string(&info.path)
-            .with_context(|| format!("Failed to read skill '{}'", name))
+        fs::read_to_string(&info.path).with_context(|| format!("Failed to read skill '{}'", name))
     }
 }

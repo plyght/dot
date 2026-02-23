@@ -21,10 +21,15 @@ use crate::db::Db;
 use crate::provider::Provider;
 use crate::tools::ToolRegistry;
 
-use app::App;
+use app::{App, ChatMessage};
 use event::{AppEvent, EventHandler};
 use input::InputAction;
-use widgets::AgentEntry;
+use widgets::{AgentEntry, SessionEntry, time_ago};
+
+pub struct ExitInfo {
+    pub conversation_id: String,
+    pub title: Option<String>,
+}
 
 pub async fn run(
     config: Config,
@@ -32,6 +37,8 @@ pub async fn run(
     db: Db,
     tools: ToolRegistry,
     profiles: Vec<AgentProfile>,
+    cwd: String,
+    resume_id: Option<String>,
 ) -> Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stderr();
@@ -43,7 +50,17 @@ pub async fn run(
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, config, providers, db, tools, profiles).await;
+    let result = run_app(
+        &mut terminal,
+        config,
+        providers,
+        db,
+        tools,
+        profiles,
+        cwd,
+        resume_id,
+    )
+    .await;
 
     terminal::disable_raw_mode()?;
     execute!(
@@ -53,7 +70,20 @@ pub async fn run(
     )?;
     terminal.show_cursor()?;
 
-    result
+    if let Ok(ref info) = result {
+        print_exit_screen(info);
+    }
+
+    result.map(|_| ())
+}
+
+fn print_exit_screen(info: &ExitInfo) {
+    let title = info.title.as_deref().unwrap_or("untitled session");
+    let id = &info.conversation_id;
+    println!();
+    println!("  \x1b[2mSession\x1b[0m   {}", title);
+    println!("  \x1b[2mResume\x1b[0m    dot -s {}", id);
+    println!();
 }
 
 async fn run_app(
@@ -63,15 +93,57 @@ async fn run_app(
     db: Db,
     tools: ToolRegistry,
     profiles: Vec<AgentProfile>,
-) -> Result<()> {
+    cwd: String,
+    resume_id: Option<String>,
+) -> Result<ExitInfo> {
     let model_name = providers[0].model().to_string();
     let provider_name = providers[0].name().to_string();
-    let agent_name = profiles.first().map(|p| p.name.clone()).unwrap_or_else(|| "dot".to_string());
+    let agent_name = profiles
+        .first()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "dot".to_string());
 
+    let agents_context = crate::context::AgentsContext::load(&cwd, &config.context);
     let agent = Arc::new(Mutex::new(Agent::new(
-        providers, db, &config, tools, profiles,
+        providers,
+        db,
+        &config,
+        tools,
+        profiles,
+        cwd,
+        agents_context,
     )?));
+
+    if let Some(ref id) = resume_id {
+        let mut agent_lock = agent.lock().await;
+        match agent_lock.get_session(id) {
+            Ok(conv) => {
+                let _ = agent_lock.resume_conversation(&conv);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to resume session {}: {}", id, e);
+            }
+        }
+    }
+
     let mut app = App::new(model_name, provider_name, agent_name, &config.theme.name);
+
+    if let Some(ref id) = resume_id {
+        let agent_lock = agent.lock().await;
+        if let Ok(conv) = agent_lock.get_session(id) {
+            for m in &conv.messages {
+                app.messages.push(ChatMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                    tool_calls: Vec::new(),
+                    thinking: None,
+                });
+            }
+            app.scroll_to_bottom();
+        }
+        drop(agent_lock);
+    }
+
     let mut events = EventHandler::new();
     let mut agent_rx: Option<mpsc::UnboundedReceiver<crate::agent::AgentEvent>> = None;
 
@@ -136,7 +208,15 @@ async fn run_app(
         }
     }
 
-    Ok(())
+    let agent_lock = agent.lock().await;
+    let conversation_id = agent_lock.conversation_id().to_string();
+    let title = agent_lock.conversation_title();
+    drop(agent_lock);
+
+    Ok(ExitInfo {
+        conversation_id,
+        title,
+    })
 }
 
 enum LoopSignal {
@@ -158,6 +238,7 @@ async fn dispatch_action(
             app.is_streaming = false;
             app.streaming_started = None;
             app.current_response.clear();
+            app.current_thinking.clear();
             app.current_tool_calls.clear();
             app.pending_tool_name = None;
             app.error_message = Some("cancelled".to_string());
@@ -175,13 +256,23 @@ async fn dispatch_action(
                 }
             });
         }
+        InputAction::NewConversation => {
+            let mut agent_lock = agent.lock().await;
+            match agent_lock.new_conversation() {
+                Ok(()) => app.clear_conversation(),
+                Err(e) => {
+                    app.error_message = Some(format!("failed to start new conversation: {e}"))
+                }
+            }
+        }
         InputAction::OpenModelSelector => {
             let agent_lock = agent.lock().await;
             let grouped = agent_lock.fetch_all_models().await;
             let current_provider = agent_lock.current_provider_name().to_string();
             let current_model = agent_lock.current_model().to_string();
             drop(agent_lock);
-            app.model_selector.open(grouped, &current_provider, &current_model);
+            app.model_selector
+                .open(grouped, &current_provider, &current_model);
         }
         InputAction::OpenAgentSelector => {
             let agent_lock = agent.lock().await;
@@ -196,6 +287,57 @@ async fn dispatch_action(
             let current = agent_lock.current_agent_name().to_string();
             drop(agent_lock);
             app.agent_selector.open(entries, &current);
+        }
+        InputAction::OpenSessionSelector => {
+            let agent_lock = agent.lock().await;
+            let sessions = agent_lock.list_sessions().unwrap_or_default();
+            drop(agent_lock);
+            let entries: Vec<SessionEntry> = sessions
+                .into_iter()
+                .map(|s| SessionEntry {
+                    id: s.id.clone(),
+                    title: s
+                        .title
+                        .unwrap_or_else(|| format!("{}…", &s.id[..8.min(s.id.len())])),
+                    subtitle: format!("{} · {}", time_ago(&s.updated_at), s.provider),
+                })
+                .collect();
+            app.session_selector.open(entries);
+        }
+        InputAction::ResumeSession { id } => {
+            let mut agent_lock = agent.lock().await;
+            match agent_lock.get_session(&id) {
+                Ok(conv) => {
+                    let messages_for_ui: Vec<(String, String)> = conv
+                        .messages
+                        .iter()
+                        .map(|m| (m.role.clone(), m.content.clone()))
+                        .collect();
+                    match agent_lock.resume_conversation(&conv) {
+                        Ok(()) => {
+                            drop(agent_lock);
+                            app.clear_conversation();
+                            for (role, content) in messages_for_ui {
+                                app.messages.push(ChatMessage {
+                                    role,
+                                    content,
+                                    tool_calls: Vec::new(),
+                                    thinking: None,
+                                });
+                            }
+                            app.scroll_to_bottom();
+                        }
+                        Err(e) => {
+                            drop(agent_lock);
+                            app.error_message = Some(format!("failed to resume session: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    drop(agent_lock);
+                    app.error_message = Some(format!("session not found: {e}"));
+                }
+            }
         }
         InputAction::SelectModel { provider, model } => {
             let mut agent_lock = agent.lock().await;
@@ -212,6 +354,17 @@ async fn dispatch_action(
         InputAction::ScrollToTop => app.scroll_to_top(),
         InputAction::ScrollToBottom => app.scroll_to_bottom(),
         InputAction::ClearConversation => app.clear_conversation(),
+        InputAction::ToggleThinking => {
+            app.thinking_expanded = !app.thinking_expanded;
+        }
+        InputAction::OpenThinkingSelector => {
+            let level = app.thinking_level();
+            app.thinking_selector.open(level);
+        }
+        InputAction::SetThinkingLevel(budget) => {
+            let mut agent_lock = agent.lock().await;
+            agent_lock.set_thinking_budget(budget);
+        }
         InputAction::None => {}
     }
     LoopSignal::Continue
@@ -227,10 +380,21 @@ async fn handle_ui_event(app: &mut App, agent: &Arc<Mutex<Agent>>, event: AppEve
                     app.is_streaming = false;
                     app.streaming_started = None;
                     app.current_response.clear();
+                    app.current_thinking.clear();
                     app.current_tool_calls.clear();
                     app.pending_tool_name = None;
                     app.error_message = Some("cancelled".to_string());
                     return LoopSignal::CancelStream;
+                }
+                InputAction::NewConversation => {
+                    let mut agent_lock = agent.lock().await;
+                    match agent_lock.new_conversation() {
+                        Ok(()) => app.clear_conversation(),
+                        Err(e) => {
+                            app.error_message =
+                                Some(format!("failed to start new conversation: {e}"))
+                        }
+                    }
                 }
                 InputAction::OpenModelSelector => {
                     let agent_lock = agent.lock().await;
@@ -238,7 +402,8 @@ async fn handle_ui_event(app: &mut App, agent: &Arc<Mutex<Agent>>, event: AppEve
                     let current_provider = agent_lock.current_provider_name().to_string();
                     let current_model = agent_lock.current_model().to_string();
                     drop(agent_lock);
-                    app.model_selector.open(grouped, &current_provider, &current_model);
+                    app.model_selector
+                        .open(grouped, &current_provider, &current_model);
                 }
                 InputAction::OpenAgentSelector => {
                     let agent_lock = agent.lock().await;
@@ -253,6 +418,58 @@ async fn handle_ui_event(app: &mut App, agent: &Arc<Mutex<Agent>>, event: AppEve
                     let current = agent_lock.current_agent_name().to_string();
                     drop(agent_lock);
                     app.agent_selector.open(entries, &current);
+                }
+                InputAction::OpenSessionSelector => {
+                    let agent_lock = agent.lock().await;
+                    let sessions = agent_lock.list_sessions().unwrap_or_default();
+                    drop(agent_lock);
+                    let entries: Vec<SessionEntry> = sessions
+                        .into_iter()
+                        .map(|s| SessionEntry {
+                            id: s.id.clone(),
+                            title: s
+                                .title
+                                .unwrap_or_else(|| format!("{}…", &s.id[..8.min(s.id.len())])),
+                            subtitle: format!("{} · {}", time_ago(&s.updated_at), s.provider),
+                        })
+                        .collect();
+                    app.session_selector.open(entries);
+                }
+                InputAction::ResumeSession { id } => {
+                    let mut agent_lock = agent.lock().await;
+                    match agent_lock.get_session(&id) {
+                        Ok(conv) => {
+                            let messages_for_ui: Vec<(String, String)> = conv
+                                .messages
+                                .iter()
+                                .map(|m| (m.role.clone(), m.content.clone()))
+                                .collect();
+                            match agent_lock.resume_conversation(&conv) {
+                                Ok(()) => {
+                                    drop(agent_lock);
+                                    app.clear_conversation();
+                                    for (role, content) in messages_for_ui {
+                                        app.messages.push(ChatMessage {
+                                            role,
+                                            content,
+                                            tool_calls: Vec::new(),
+                                            thinking: None,
+                                        });
+                                    }
+                                    app.scroll_to_bottom();
+                                }
+                                Err(e) => {
+                                    drop(agent_lock);
+                                    app.error_message =
+                                        Some(format!("failed to resume session: {e}"));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            drop(agent_lock);
+                            app.error_message = Some(format!("session not found: {e}"));
+                        }
+                    }
                 }
                 InputAction::SelectModel { provider, model } => {
                     let mut agent_lock = agent.lock().await;
@@ -269,6 +486,17 @@ async fn handle_ui_event(app: &mut App, agent: &Arc<Mutex<Agent>>, event: AppEve
                 InputAction::ScrollToTop => app.scroll_to_top(),
                 InputAction::ScrollToBottom => app.scroll_to_bottom(),
                 InputAction::ClearConversation => app.clear_conversation(),
+                InputAction::ToggleThinking => {
+                    app.thinking_expanded = !app.thinking_expanded;
+                }
+                InputAction::OpenThinkingSelector => {
+                    let level = app.thinking_level();
+                    app.thinking_selector.open(level);
+                }
+                InputAction::SetThinkingLevel(budget) => {
+                    let mut agent_lock = agent.lock().await;
+                    agent_lock.set_thinking_budget(budget);
+                }
                 InputAction::SendMessage(_) => {}
                 InputAction::None => {}
             }

@@ -1,7 +1,9 @@
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::tui::app::{App, AppMode};
-use crate::tui::widgets::COMMANDS;
+use crate::tui::widgets::{COMMANDS, ThinkingLevel};
 
 pub enum InputAction {
     None,
@@ -13,10 +15,16 @@ pub enum InputAction {
     ScrollToTop,
     ScrollToBottom,
     ClearConversation,
+    NewConversation,
     OpenModelSelector,
     OpenAgentSelector,
+    OpenThinkingSelector,
+    OpenSessionSelector,
     SelectModel { provider: String, model: String },
     SelectAgent { name: String },
+    ResumeSession { id: String },
+    SetThinkingLevel(u32),
+    ToggleThinking,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
@@ -33,10 +41,35 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             app.command_palette.close();
             return InputAction::None;
         }
+        if app.thinking_selector.visible {
+            app.thinking_selector.close();
+            return InputAction::None;
+        }
+        if app.session_selector.visible {
+            app.session_selector.close();
+            return InputAction::None;
+        }
         if app.is_streaming {
             return InputAction::CancelStream;
         }
+        if !app.input.is_empty() {
+            app.input.clear();
+            app.cursor_pos = 0;
+            return InputAction::None;
+        }
         return InputAction::Quit;
+    }
+
+    if key.code == KeyCode::Esc && app.is_streaming {
+        let now = Instant::now();
+        let is_double = app
+            .last_escape_time
+            .map(|t| t.elapsed() < Duration::from_millis(500))
+            .unwrap_or(false);
+        app.last_escape_time = if is_double { None } else { Some(now) };
+        if is_double {
+            return InputAction::CancelStream;
+        }
     }
 
     if app.model_selector.visible {
@@ -45,6 +78,14 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
 
     if app.agent_selector.visible {
         return handle_agent_selector(app, key);
+    }
+
+    if app.thinking_selector.visible {
+        return handle_thinking_selector(app, key);
+    }
+
+    if app.session_selector.visible {
+        return handle_session_selector(app, key);
     }
 
     if app.command_palette.visible {
@@ -123,6 +164,68 @@ fn handle_agent_selector(app: &mut App, key: KeyEvent) -> InputAction {
     }
 }
 
+fn handle_thinking_selector(app: &mut App, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.thinking_selector.close();
+            InputAction::None
+        }
+        KeyCode::Up => {
+            app.thinking_selector.up();
+            InputAction::None
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            app.thinking_selector.down();
+            InputAction::None
+        }
+        KeyCode::Enter => {
+            if let Some(level) = app.thinking_selector.confirm() {
+                let budget = level.budget_tokens();
+                app.thinking_budget = budget;
+                InputAction::SetThinkingLevel(budget)
+            } else {
+                InputAction::None
+            }
+        }
+        _ => InputAction::None,
+    }
+}
+
+fn handle_session_selector(app: &mut App, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.session_selector.close();
+            InputAction::None
+        }
+        KeyCode::Up => {
+            app.session_selector.up();
+            InputAction::None
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            app.session_selector.down();
+            InputAction::None
+        }
+        KeyCode::Enter => {
+            if let Some(id) = app.session_selector.confirm() {
+                InputAction::ResumeSession { id }
+            } else {
+                InputAction::None
+            }
+        }
+        KeyCode::Backspace => {
+            app.session_selector.query.pop();
+            app.session_selector.apply_filter();
+            InputAction::None
+        }
+        KeyCode::Char(c) => {
+            app.session_selector.query.push(c);
+            app.session_selector.apply_filter();
+            InputAction::None
+        }
+        _ => InputAction::None,
+    }
+}
+
 fn handle_command_palette(app: &mut App, key: KeyEvent) -> InputAction {
     match key.code {
         KeyCode::Esc => {
@@ -171,6 +274,9 @@ fn execute_command(app: &mut App, cmd_name: &str) -> InputAction {
     match cmd_name {
         "model" => InputAction::OpenModelSelector,
         "agent" => InputAction::OpenAgentSelector,
+        "thinking" => InputAction::OpenThinkingSelector,
+        "sessions" => InputAction::OpenSessionSelector,
+        "new" => InputAction::NewConversation,
         "clear" => {
             app.clear_conversation();
             InputAction::None
@@ -210,11 +316,16 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputAction {
             InputAction::ClearConversation
         }
         KeyCode::Tab => InputAction::OpenAgentSelector,
+        KeyCode::Char('t') => InputAction::ToggleThinking,
         _ => InputAction::None,
     }
 }
 
 fn handle_insert(app: &mut App, key: KeyEvent) -> InputAction {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+        return InputAction::OpenThinkingSelector;
+    }
+
     if app.is_streaming {
         match key.code {
             KeyCode::Esc => {
@@ -326,6 +437,34 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
             if app.agent_selector.visible {
                 app.agent_selector.close();
                 return InputAction::None;
+            }
+
+            if app.thinking_selector.visible {
+                if let Some(popup) = app.layout.thinking_selector {
+                    if rect_contains(popup, col, row) {
+                        let relative_row = row.saturating_sub(popup.y + 1) as usize;
+                        if relative_row < ThinkingLevel::all().len() {
+                            app.thinking_selector.selected = relative_row;
+                            if let Some(level) = app.thinking_selector.confirm() {
+                                let budget = level.budget_tokens();
+                                app.thinking_budget = budget;
+                                return InputAction::SetThinkingLevel(budget);
+                            }
+                        }
+                    } else {
+                        app.thinking_selector.close();
+                    }
+                    return InputAction::None;
+                }
+            }
+
+            if app.session_selector.visible {
+                if let Some(popup) = app.layout.session_selector {
+                    if !rect_contains(popup, col, row) {
+                        app.session_selector.close();
+                    }
+                    return InputAction::None;
+                }
             }
 
             if app.command_palette.visible {

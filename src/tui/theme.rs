@@ -84,12 +84,10 @@ impl Theme {
     pub fn from_config(name: &str) -> Self {
         match name {
             "light" => Self::light(),
-            "auto" => {
-                match detect_terminal_background() {
-                    TerminalBackground::Light => Self::light(),
-                    TerminalBackground::Dark => Self::dark(),
-                }
-            }
+            "auto" => match detect_terminal_background() {
+                TerminalBackground::Light => Self::light(),
+                TerminalBackground::Dark => Self::dark(),
+            },
             _ => Self::dark(),
         }
     }
@@ -113,26 +111,18 @@ impl Theme {
             dim: Style::default().fg(muted),
             accent,
             muted_fg: muted,
-            user_label: Style::default()
-                .fg(mauve)
-                .add_modifier(Modifier::BOLD),
-            assistant_label: Style::default()
-                .fg(accent)
-                .add_modifier(Modifier::BOLD),
+            user_label: Style::default().fg(mauve).add_modifier(Modifier::BOLD),
+            assistant_label: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             border: Style::default().fg(surface),
             input_prompt: Style::default().fg(accent),
             status_bar: Style::default().fg(muted),
             code_bg: base,
             inline_code: Style::default().fg(peach),
             error: Style::default().fg(red),
-            tool_name: Style::default()
-                .fg(yellow)
-                .add_modifier(Modifier::BOLD),
+            tool_name: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
             tool_output: Style::default().fg(muted),
             tool_success: Style::default().fg(green),
-            heading: Style::default()
-                .fg(accent)
-                .add_modifier(Modifier::BOLD),
+            heading: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             bold: Style::default().add_modifier(Modifier::BOLD),
             italic: Style::default().add_modifier(Modifier::ITALIC),
             blockquote: Style::default().fg(muted),
@@ -182,26 +172,18 @@ impl Theme {
             dim: Style::default().fg(muted),
             accent,
             muted_fg: muted,
-            user_label: Style::default()
-                .fg(mauve)
-                .add_modifier(Modifier::BOLD),
-            assistant_label: Style::default()
-                .fg(accent)
-                .add_modifier(Modifier::BOLD),
+            user_label: Style::default().fg(mauve).add_modifier(Modifier::BOLD),
+            assistant_label: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             border: Style::default().fg(surface),
             input_prompt: Style::default().fg(accent),
             status_bar: Style::default().fg(muted),
             code_bg: base,
             inline_code: Style::default().fg(peach),
             error: Style::default().fg(red),
-            tool_name: Style::default()
-                .fg(yellow)
-                .add_modifier(Modifier::BOLD),
+            tool_name: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
             tool_output: Style::default().fg(muted),
             tool_success: Style::default().fg(green),
-            heading: Style::default()
-                .fg(accent)
-                .add_modifier(Modifier::BOLD),
+            heading: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             bold: Style::default().add_modifier(Modifier::BOLD),
             italic: Style::default().add_modifier(Modifier::ITALIC),
             blockquote: Style::default().fg(muted),
@@ -220,9 +202,7 @@ impl Theme {
             tool_mcp: Style::default().fg(teal),
             tool_skill: Style::default().fg(mauve),
             tool_badge_bg: surface,
-            tool_path: Style::default()
-                .fg(text)
-                .add_modifier(Modifier::UNDERLINED),
+            tool_path: Style::default().fg(text).add_modifier(Modifier::UNDERLINED),
             thinking: Style::default().fg(muted),
             mode_normal_fg: Color::White,
             mode_normal_bg: muted,

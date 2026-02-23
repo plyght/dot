@@ -29,7 +29,7 @@ pub struct AnthropicProvider {
     client: reqwest::Client,
     model: String,
     auth: tokio::sync::Mutex<AnthropicAuth>,
-    cached_models: tokio::sync::Mutex<Option<Vec<String>>>,
+    cached_models: std::sync::Mutex<Option<Vec<String>>>,
 }
 
 impl AnthropicProvider {
@@ -41,7 +41,7 @@ impl AnthropicProvider {
                 .expect("Failed to build reqwest client"),
             model: model.into(),
             auth: tokio::sync::Mutex::new(AnthropicAuth::ApiKey(api_key.into())),
-            cached_models: tokio::sync::Mutex::new(None),
+            cached_models: std::sync::Mutex::new(None),
         }
     }
 
@@ -62,7 +62,7 @@ impl AnthropicProvider {
                 refresh_token: refresh_token.into(),
                 expires_at,
             }),
-            cached_models: tokio::sync::Mutex::new(None),
+            cached_models: std::sync::Mutex::new(None),
         }
     }
 
@@ -83,8 +83,14 @@ impl AnthropicProvider {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
+                // Handle legacy millis-format expires_at from older credentials
+                let expires_at_secs = if *expires_at > 1_000_000_000_000 {
+                    *expires_at / 1000
+                } else {
+                    *expires_at
+                };
 
-                let token = if now >= *expires_at - 60 {
+                let token = if now >= expires_at_secs - 60 {
                     let rt = refresh_token.clone();
                     match refresh_oauth_token(&self.client, &rt).await {
                         Ok((new_token, new_expires_at)) => {
@@ -174,6 +180,8 @@ struct AnthropicRequest<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<serde_json::Value>,
     temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<serde_json::Value>,
 }
 
 fn convert_content_block(block: &ContentBlock) -> serde_json::Value {
@@ -197,6 +205,14 @@ fn convert_content_block(block: &ContentBlock) -> serde_json::Value {
             "tool_use_id": tool_use_id,
             "content": content,
             "is_error": is_error,
+        }),
+        ContentBlock::Thinking {
+            thinking,
+            signature,
+        } => serde_json::json!({
+            "type": "thinking",
+            "thinking": thinking,
+            "signature": signature,
         }),
     }
 }
@@ -261,6 +277,11 @@ fn stop_reason_from_str(s: &str) -> StopReason {
     }
 }
 
+struct ThinkingAccum {
+    thinking: String,
+    signature: String,
+}
+
 async fn process_sse_stream(
     response: reqwest::Response,
     tx: mpsc::UnboundedSender<StreamEvent>,
@@ -269,6 +290,7 @@ async fn process_sse_stream(
     let mut buffer = String::new();
 
     let mut block_types: HashMap<usize, String> = HashMap::new();
+    let mut thinking_accums: HashMap<usize, ThinkingAccum> = HashMap::new();
     let mut accumulated_input_tokens: u32 = 0;
 
     macro_rules! send {
@@ -333,12 +355,21 @@ async fn process_sse_stream(
                                     .to_string();
                                 debug!("Tool use start: id={id} name={name}");
                                 send!(StreamEventType::ToolUseStart { id, name });
+                            } else if block_type == "thinking" {
+                                thinking_accums.insert(
+                                    index,
+                                    ThinkingAccum {
+                                        thinking: String::new(),
+                                        signature: String::new(),
+                                    },
+                                );
                             }
 
                             block_types.insert(index, block_type);
                         }
 
                         "content_block_delta" => {
+                            let index = json["index"].as_u64().unwrap_or(0) as usize;
                             let delta = &json["delta"];
                             let delta_type = delta["type"].as_str().unwrap_or("");
 
@@ -356,6 +387,21 @@ async fn process_sse_stream(
                                         send!(StreamEventType::ToolUseInputDelta(partial));
                                     }
                                 }
+                                "thinking_delta" => {
+                                    let text = delta["thinking"].as_str().unwrap_or("").to_string();
+                                    if !text.is_empty() {
+                                        if let Some(accum) = thinking_accums.get_mut(&index) {
+                                            accum.thinking.push_str(&text);
+                                        }
+                                        send!(StreamEventType::ThinkingDelta(text));
+                                    }
+                                }
+                                "signature_delta" => {
+                                    let sig = delta["signature"].as_str().unwrap_or("").to_string();
+                                    if let Some(accum) = thinking_accums.get_mut(&index) {
+                                        accum.signature = sig;
+                                    }
+                                }
                                 other => {
                                     debug!("Unknown delta type: {other}");
                                 }
@@ -364,12 +410,16 @@ async fn process_sse_stream(
 
                         "content_block_stop" => {
                             let index = json["index"].as_u64().unwrap_or(0) as usize;
-                            if block_types
-                                .get(&index)
-                                .map(|t| t == "tool_use")
-                                .unwrap_or(false)
-                            {
+                            let btype = block_types.get(&index).map(|s| s.as_str()).unwrap_or("");
+                            if btype == "tool_use" {
                                 send!(StreamEventType::ToolUseEnd);
+                            } else if btype == "thinking" {
+                                if let Some(accum) = thinking_accums.remove(&index) {
+                                    send!(StreamEventType::ThinkingComplete {
+                                        thinking: accum.thinking,
+                                        signature: accum.signature,
+                                    });
+                                }
                             }
                             block_types.remove(&index);
                         }
@@ -440,14 +490,8 @@ impl Provider for AnthropicProvider {
     }
 
     fn available_models(&self) -> Vec<String> {
-        let cache = self.cached_models.blocking_lock();
-        cache.clone().unwrap_or_else(|| {
-            vec![
-                "claude-sonnet-4-20250514".to_string(),
-                "claude-opus-4-20250514".to_string(),
-                "claude-haiku-4-20250414".to_string(),
-            ]
-        })
+        let cache = self.cached_models.lock().unwrap();
+        cache.clone().unwrap_or_default()
     }
 
     fn fetch_models(
@@ -455,65 +499,82 @@ impl Provider for AnthropicProvider {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<String>>> + Send + '_>> {
         Box::pin(async move {
             {
-                let cache = self.cached_models.lock().await;
+                let cache = self.cached_models.lock().unwrap();
                 if let Some(ref models) = *cache {
                     return Ok(models.clone());
                 }
             }
-
             let auth = self.resolve_auth().await?;
+            let mut all_models: Vec<String> = Vec::new();
+            let mut after_id: Option<String> = None;
 
-            let mut req = self
-                .client
-                .get("https://api.anthropic.com/v1/models")
-                .header(&auth.header_name, &auth.header_value)
-                .header("anthropic-version", "2023-06-01");
+            loop {
+                let mut url = "https://api.anthropic.com/v1/models?limit=1000".to_string();
+                if let Some(ref cursor) = after_id {
+                    url.push_str(&format!("&after_id={cursor}"));
+                }
 
-            if auth.is_oauth {
-                req = req
-                    .header(
-                        "anthropic-beta",
-                        "oauth-2025-04-20,interleaved-thinking-2025-05-14",
-                    )
-                    .header("user-agent", "claude-code/2.1.49 (external, cli)");
+                let mut req = self
+                    .client
+                    .get(&url)
+                    .header(&auth.header_name, &auth.header_value)
+                    .header("anthropic-version", "2023-06-01");
+
+                if auth.is_oauth {
+                    req = req
+                        .header(
+                            "anthropic-beta",
+                            "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+                        )
+                        .header("user-agent", "claude-code/2.1.49 (external, cli)");
+                }
+
+                let resp = req
+                    .send()
+                    .await
+                    .context("Failed to fetch Anthropic models")?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(anyhow::anyhow!(
+                        "Anthropic models API error {status}: {body}"
+                    ));
+                }
+
+                let data: serde_json::Value = resp
+                    .json()
+                    .await
+                    .context("Failed to parse Anthropic models response")?;
+
+                if let Some(arr) = data["data"].as_array() {
+                    for m in arr {
+                        if let Some(id) = m["id"].as_str() {
+                            all_models.push(id.to_string());
+                        }
+                    }
+                }
+
+                let has_more = data["has_more"].as_bool().unwrap_or(false);
+                if !has_more {
+                    break;
+                }
+
+                match data["last_id"].as_str() {
+                    Some(last) => after_id = Some(last.to_string()),
+                    None => break,
+                }
             }
 
-            let resp = req
-                .send()
-                .await
-                .context("Failed to fetch Anthropic models")?;
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                warn!("Anthropic models API error {status}: {body}");
-                return Ok(self.available_models());
+            if all_models.is_empty() {
+                return Err(anyhow::anyhow!("Anthropic models API returned empty list"));
             }
 
-            let data: serde_json::Value = resp
-                .json()
-                .await
-                .context("Failed to parse Anthropic models response")?;
+            all_models.sort();
+            let mut cache = self.cached_models.lock().unwrap();
+            *cache = Some(all_models.clone());
 
-            let mut models: Vec<String> = data["data"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| m["id"].as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            if models.is_empty() {
-                return Ok(self.available_models());
-            }
-
-            models.sort();
-
-            let mut cache = self.cached_models.lock().await;
-            *cache = Some(models.clone());
-
-            Ok(models)
+            Ok(all_models)
         })
     }
 
@@ -523,6 +584,7 @@ impl Provider for AnthropicProvider {
         system: Option<&str>,
         tools: &[ToolDefinition],
         max_tokens: u32,
+        thinking_budget: u32,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<UnboundedReceiver<StreamEvent>>> + Send + '_>>
     {
         let messages = messages.to_vec();
@@ -538,14 +600,30 @@ impl Provider for AnthropicProvider {
                 "https://api.anthropic.com/v1/messages".to_string()
             };
 
+            let thinking = if thinking_budget >= 1024 {
+                Some(serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": thinking_budget,
+                }))
+            } else {
+                None
+            };
+
+            let effective_max_tokens = if thinking_budget >= 1024 {
+                max_tokens.max(thinking_budget.saturating_add(4096))
+            } else {
+                max_tokens
+            };
+
             let body = AnthropicRequest {
                 model: &self.model,
                 messages: convert_messages(&messages),
-                max_tokens,
+                max_tokens: effective_max_tokens,
                 stream: true,
                 system: system.as_deref(),
                 tools: convert_tools(&tools),
                 temperature: 1.0,
+                thinking,
             };
 
             let mut req_builder = self
@@ -562,6 +640,9 @@ impl Provider for AnthropicProvider {
                         "oauth-2025-04-20,interleaved-thinking-2025-05-14",
                     )
                     .header("user-agent", "claude-code/2.1.49 (external, cli)");
+            } else if thinking_budget >= 1024 {
+                req_builder =
+                    req_builder.header("anthropic-beta", "interleaved-thinking-2025-05-14");
             }
 
             let response = req_builder

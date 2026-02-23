@@ -7,12 +7,13 @@ use crate::config::{AgentConfig, Config};
 use crate::db::Db;
 use crate::provider::{ContentBlock, Message, Provider, Role, StreamEventType, Usage};
 use crate::tools::ToolRegistry;
-
-const DEFAULT_SYSTEM_PROMPT: &str = "\
-You are dot, a helpful AI coding assistant running in a terminal. \
+const DEFAULT_SYSTEM_PROMPT: &str = "You are dot, a helpful AI coding assistant running in a terminal. \
 You have access to tools for reading/writing files, running shell commands, and searching code. \
-Be concise and direct. When asked to make changes, use the tools to implement them — \
-don't just describe what to do.";
+Be concise and direct. When asked to make changes, use the tools to implement them. \
+Don't just describe what to do.";
+const COMPACT_CONTEXT_LIMIT: u32 = 200_000;
+const COMPACT_THRESHOLD: f32 = 0.8;
+const COMPACT_KEEP_MESSAGES: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct AgentProfile {
@@ -53,6 +54,7 @@ impl AgentProfile {
 #[derive(Debug)]
 pub enum AgentEvent {
     TextDelta(String),
+    ThinkingDelta(String),
     TextComplete(String),
     ToolCallStart {
         id: String,
@@ -74,6 +76,10 @@ pub enum AgentEvent {
         usage: Usage,
     },
     Error(String),
+    Compacting,
+    Compacted {
+        messages_removed: usize,
+    },
 }
 
 struct PendingToolCall {
@@ -91,6 +97,10 @@ pub struct Agent {
     messages: Vec<Message>,
     profiles: Vec<AgentProfile>,
     active_profile: usize,
+    pub thinking_budget: u32,
+    cwd: String,
+    agents_context: crate::context::AgentsContext,
+    last_input_tokens: u32,
 }
 
 impl Agent {
@@ -100,18 +110,18 @@ impl Agent {
         _config: &Config,
         tools: ToolRegistry,
         profiles: Vec<AgentProfile>,
+        cwd: String,
+        agents_context: crate::context::AgentsContext,
     ) -> Result<Self> {
         assert!(!providers.is_empty(), "at least one provider required");
         let conversation_id =
-            db.create_conversation(providers[0].model(), providers[0].name())?;
+            db.create_conversation(providers[0].model(), providers[0].name(), &cwd)?;
         tracing::debug!("Agent created with conversation {}", conversation_id);
-
         let profiles = if profiles.is_empty() {
             vec![AgentProfile::default_profile()]
         } else {
             profiles
         };
-
         Ok(Agent {
             providers,
             active: 0,
@@ -121,6 +131,10 @@ impl Agent {
             messages: Vec::new(),
             profiles,
             active_profile: 0,
+            thinking_budget: 0,
+            cwd,
+            agents_context,
+            last_input_tokens: 0,
         })
     }
 
@@ -149,10 +163,18 @@ impl Agent {
     }
 
     pub fn set_active_provider(&mut self, provider_name: &str, model: &str) {
-        if let Some(idx) = self.providers.iter().position(|p| p.name() == provider_name) {
+        if let Some(idx) = self
+            .providers
+            .iter()
+            .position(|p| p.name() == provider_name)
+        {
             self.active = idx;
             self.providers[idx].set_model(model.to_string());
         }
+    }
+
+    pub fn set_thinking_budget(&mut self, budget: u32) {
+        self.thinking_budget = budget;
     }
 
     pub fn available_models(&self) -> Vec<String> {
@@ -164,7 +186,10 @@ impl Agent {
         for p in &self.providers {
             let models = match p.fetch_models().await {
                 Ok(m) => m,
-                Err(_) => p.available_models(),
+                Err(e) => {
+                    tracing::warn!("Failed to fetch models for {}: {e}", p.name());
+                    Vec::new()
+                }
             };
             result.push((p.name().to_string(), models));
         }
@@ -208,19 +233,153 @@ impl Agent {
         }
     }
 
+    pub fn new_conversation(&mut self) -> Result<()> {
+        let conversation_id = self.db.create_conversation(
+            self.provider().model(),
+            self.provider().name(),
+            &self.cwd,
+        )?;
+        self.conversation_id = conversation_id;
+        self.messages.clear();
+        Ok(())
+    }
+
+    pub fn resume_conversation(&mut self, conversation: &crate::db::Conversation) -> Result<()> {
+        self.conversation_id = conversation.id.clone();
+        self.messages = conversation
+            .messages
+            .iter()
+            .map(|m| Message {
+                role: if m.role == "user" {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                content: vec![ContentBlock::Text(m.content.clone())],
+            })
+            .collect();
+        tracing::debug!("Resumed conversation {}", conversation.id);
+        Ok(())
+    }
+
+    pub fn list_sessions(&self) -> Result<Vec<crate::db::ConversationSummary>> {
+        self.db.list_conversations_for_cwd(&self.cwd, 50)
+    }
+
+    pub fn get_session(&self, id: &str) -> Result<crate::db::Conversation> {
+        self.db.get_conversation(id)
+    }
+
+    pub fn conversation_title(&self) -> Option<String> {
+        self.db
+            .get_conversation(&self.conversation_id)
+            .ok()
+            .and_then(|c| c.title)
+    }
+
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    fn should_compact(&self) -> bool {
+        let threshold = (COMPACT_CONTEXT_LIMIT as f32 * COMPACT_THRESHOLD) as u32;
+        self.last_input_tokens >= threshold
+    }
+
+    async fn compact(&mut self, event_tx: &UnboundedSender<AgentEvent>) -> Result<()> {
+        let keep = COMPACT_KEEP_MESSAGES;
+        if self.messages.len() <= keep + 2 {
+            return Ok(());
+        }
+
+        let cutoff = self.messages.len() - keep;
+        let old_messages = self.messages[..cutoff].to_vec();
+        let kept = self.messages[cutoff..].to_vec();
+
+        let mut summary_text = String::new();
+        for msg in &old_messages {
+            let role = match msg.role {
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+                Role::System => "System",
+            };
+            for block in &msg.content {
+                if let ContentBlock::Text(t) = block {
+                    summary_text.push_str(&format!("{}:\n{}\n\n", role, t));
+                }
+            }
+        }
+
+        let summary_request = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text(format!(
+                "Summarize the following conversation history concisely, preserving all key decisions, facts, code changes, and context that would be needed to continue the work:\n\n{}",
+                summary_text
+            ))],
+        }];
+
+        let mut stream_rx = self
+            .provider()
+            .stream(
+                &summary_request,
+                Some("You are a concise summarizer. Produce a dense, factual summary."),
+                &[],
+                4096,
+                0,
+            )
+            .await?;
+
+        let mut full_summary = String::new();
+        while let Some(event) = stream_rx.recv().await {
+            if let StreamEventType::TextDelta(text) = event.event_type {
+                full_summary.push_str(&text);
+            }
+        }
+
+        self.messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text(
+                    "[Previous conversation summarized below]".to_string(),
+                )],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text(format!(
+                    "Summary of prior context:\n\n{}",
+                    full_summary
+                ))],
+            },
+        ];
+        self.messages.extend(kept);
+
+        let _ = self.db.add_message(
+            &self.conversation_id,
+            "assistant",
+            &format!("[Compacted {} messages into summary]", cutoff),
+        );
+
+        self.last_input_tokens = 0;
+        let _ = event_tx.send(AgentEvent::Compacted {
+            messages_removed: cutoff,
+        });
+        Ok(())
+    }
+
     pub async fn send_message(
         &mut self,
         content: &str,
         event_tx: UnboundedSender<AgentEvent>,
     ) -> Result<()> {
+        if self.should_compact() {
+            self.compact(&event_tx).await?;
+        }
         self.db
             .add_message(&self.conversation_id, "user", content)?;
-
         self.messages.push(Message {
             role: Role::User,
             content: vec![ContentBlock::Text(content.to_string())],
         });
-
         if self.messages.len() == 1 {
             let title: String = content.chars().take(60).collect();
             let _ = self
@@ -229,18 +388,29 @@ impl Agent {
         }
 
         let mut final_usage: Option<Usage> = None;
-        let system_prompt = self.profile().system_prompt.clone();
+        let system_prompt = self
+            .agents_context
+            .apply_to_system_prompt(&self.profile().system_prompt);
         let tool_filter = self.profile().tool_filter.clone();
+        let thinking_budget = self.thinking_budget;
 
         loop {
             let tool_defs = self.tools.definitions_filtered(&tool_filter);
 
             let mut stream_rx = self
                 .provider()
-                .stream(&self.messages, Some(&system_prompt), &tool_defs, 8192)
+                .stream(
+                    &self.messages,
+                    Some(&system_prompt),
+                    &tool_defs,
+                    8192,
+                    thinking_budget,
+                )
                 .await?;
 
             let mut full_text = String::new();
+            let mut full_thinking = String::new();
+            let mut full_thinking_signature = String::new();
             let mut tool_calls: Vec<PendingToolCall> = Vec::new();
             let mut current_tool_input = String::new();
 
@@ -249,6 +419,19 @@ impl Agent {
                     StreamEventType::TextDelta(text) => {
                         full_text.push_str(&text);
                         let _ = event_tx.send(AgentEvent::TextDelta(text));
+                    }
+
+                    StreamEventType::ThinkingDelta(text) => {
+                        full_thinking.push_str(&text);
+                        let _ = event_tx.send(AgentEvent::ThinkingDelta(text));
+                    }
+
+                    StreamEventType::ThinkingComplete {
+                        thinking,
+                        signature,
+                    } => {
+                        full_thinking = thinking;
+                        full_thinking_signature = signature;
                     }
 
                     StreamEventType::ToolUseStart { id, name } => {
@@ -280,6 +463,7 @@ impl Agent {
                         stop_reason: _,
                         usage,
                     } => {
+                        self.last_input_tokens = usage.input_tokens;
                         final_usage = Some(usage);
                     }
 
@@ -288,6 +472,13 @@ impl Agent {
             }
 
             let mut content_blocks: Vec<ContentBlock> = Vec::new();
+
+            if !full_thinking.is_empty() {
+                content_blocks.push(ContentBlock::Thinking {
+                    thinking: full_thinking.clone(),
+                    signature: full_thinking_signature.clone(),
+                });
+            }
 
             if !full_text.is_empty() {
                 content_blocks.push(ContentBlock::Text(full_text.clone()));

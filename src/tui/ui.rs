@@ -40,8 +40,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ui_popups::draw_agent_selector(frame, app);
     }
 
+    if app.thinking_selector.visible {
+        ui_popups::draw_thinking_selector(frame, app);
+    }
+
     if app.command_palette.visible {
         ui_popups::draw_command_palette(frame, app, chunks[2]);
+    }
+
+    if app.session_selector.visible {
+        ui_popups::draw_session_selector(frame, app);
     }
 }
 
@@ -85,6 +93,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
+    if app.thinking_budget > 0 {
+        spans.push(sep.clone());
+        spans.push(Span::styled(
+            format!("\u{25c7} think:{}", app.thinking_level().label()),
+            app.theme.thinking,
+        ));
+    }
+
     spans.push(Span::raw("  "));
     spans.push(mode_indicator);
 
@@ -112,32 +128,32 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
         if msg.role == "user" {
             all_lines.push(Line::from(vec![
-                Span::styled(
-                    "  \u{25cf} ",
-                    Style::default().fg(app.theme.muted_fg),
-                ),
+                Span::styled("  \u{25cf} ", Style::default().fg(app.theme.muted_fg)),
                 Span::styled("You", app.theme.user_label),
             ]));
             for text_line in msg.content.lines() {
                 all_lines.push(Line::from(Span::raw(format!("    {}", text_line))));
             }
+        } else if msg.role == "compact" {
+            all_lines.push(Line::from(vec![
+                Span::styled("  ", app.theme.thinking),
+                Span::styled(msg.content.clone(), app.theme.dim),
+            ]));
         } else {
             all_lines.push(Line::from(vec![
-                Span::styled(
-                    "  \u{25c6} ",
-                    Style::default().fg(app.theme.accent),
-                ),
+                Span::styled("  \u{25c6} ", Style::default().fg(app.theme.accent)),
                 Span::styled("Assistant", app.theme.assistant_label),
             ]));
-
+            if let Some(ref thinking) = msg.thinking {
+                render_thinking_block(thinking, app.thinking_expanded, &app.theme, &mut all_lines);
+            }
             let md_lines =
-                markdown::render_markdown(&msg.content, &app.theme, inner.width);
+                markdown::render_markdown(&msg.content, &app.theme, inner.width.saturating_sub(4));
             for line in md_lines {
                 let mut padded = vec![Span::raw("    ")];
                 padded.extend(line.spans);
                 all_lines.push(Line::from(padded));
             }
-
             ui_tools::render_tool_calls(&msg.tool_calls, &app.theme, &mut all_lines);
         }
     }
@@ -158,10 +174,25 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         all_lines.extend(ui_popups::draw_empty_state(app));
     }
 
-    let total_lines = all_lines.len() as u16;
-    let visible = inner.height;
-    app.max_scroll = total_lines.saturating_sub(visible);
-    if app.scroll_offset > app.max_scroll {
+    let total_visual: u32 = all_lines
+        .iter()
+        .map(|l| {
+            if inner.width == 0 {
+                return 1u32;
+            }
+            let chars: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
+            if chars == 0 {
+                1
+            } else {
+                ((chars as u32 + inner.width as u32 - 1) / inner.width as u32).max(1)
+            }
+        })
+        .sum();
+    let visible = inner.height as u32;
+    app.max_scroll = total_visual.saturating_sub(visible).min(u16::MAX as u32) as u16;
+    if app.follow_bottom {
+        app.scroll_offset = app.max_scroll;
+    } else if app.scroll_offset > app.max_scroll {
         app.scroll_offset = app.max_scroll;
     }
 
@@ -197,6 +228,46 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn render_thinking_block(
+    thinking: &str,
+    expanded: bool,
+    theme: &crate::tui::theme::Theme,
+    lines: &mut Vec<Line<'static>>,
+) {
+    if expanded {
+        lines.push(Line::from(vec![
+            Span::styled("    \u{25bd} ", theme.thinking),
+            Span::styled("thinking", theme.thinking),
+            Span::styled(
+                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                theme.thinking,
+            ),
+        ]));
+        for text_line in thinking.lines() {
+            lines.push(Line::from(vec![
+                Span::styled("    \u{2502} ", theme.thinking),
+                Span::styled(text_line.to_string(), theme.dim),
+            ]));
+        }
+        lines.push(Line::from(Span::styled(
+            "    \u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            theme.thinking,
+        )));
+    } else {
+        let token_hint = if thinking.len() > 100 {
+            format!(" (~{}w)", thinking.split_whitespace().count())
+        } else {
+            String::new()
+        };
+        lines.push(Line::from(vec![
+            Span::styled("    \u{25b6} ", theme.thinking),
+            Span::styled("thinking", theme.thinking),
+            Span::styled(token_hint, theme.dim),
+            Span::styled("  [t]", theme.dim),
+        ]));
+    }
+}
+
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let border_style = if app.mode == AppMode::Insert && !app.is_streaming {
         Style::default().fg(app.theme.accent)
@@ -228,7 +299,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.input.is_empty() {
         vec![Line::from(vec![
             Span::styled("\u{276f} ", app.theme.input_prompt),
-            Span::styled("message or /model, /help, /agent", app.theme.dim),
+            Span::styled("message  /model  /sessions  /new  /help", app.theme.dim),
         ])]
     } else {
         let mut lines = Vec::new();
@@ -299,17 +370,20 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
-    let right = if app.model_selector.visible || app.agent_selector.visible {
+    let right = if app.model_selector.visible
+        || app.agent_selector.visible
+        || app.thinking_selector.visible
+    {
         "\u{2191}\u{2193} select \u{00b7} enter confirm \u{00b7} esc cancel "
     } else if app.mode == AppMode::Insert {
-        "/model \u{00b7} /agent \u{00b7} esc normal \u{00b7} ctrl+c quit "
+        "/model \u{00b7} ctrl+t thinking \u{00b7} esc normal \u{00b7} ctrl+c quit "
     } else {
-        "i insert \u{00b7} j/k scroll \u{00b7} tab agents \u{00b7} q quit "
+        "i insert \u{00b7} j/k scroll \u{00b7} t thinking \u{00b7} tab agents \u{00b7} q quit "
     };
 
-    let padding = area.width.saturating_sub(
-        left.len() as u16 + scroll_indicator.len() as u16 + right.len() as u16,
-    );
+    let padding = area
+        .width
+        .saturating_sub(left.len() as u16 + scroll_indicator.len() as u16 + right.len() as u16);
 
     let line = Line::from(vec![
         Span::styled(left, app.theme.status_bar),

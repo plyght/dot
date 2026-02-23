@@ -50,9 +50,7 @@ impl ToolRegistry {
         }
         self.tools
             .iter()
-            .filter(|t| {
-                filter.get(t.name()).copied().unwrap_or(true)
-            })
+            .filter(|t| filter.get(t.name()).copied().unwrap_or(true))
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description().to_string(),

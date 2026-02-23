@@ -2,6 +2,7 @@ pub mod agent;
 pub mod auth;
 pub mod cli;
 pub mod config;
+pub mod context;
 pub mod db;
 pub mod mcp;
 pub mod provider;

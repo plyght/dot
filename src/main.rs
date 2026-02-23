@@ -51,7 +51,9 @@ async fn main() -> Result<()> {
                 println!("\nAdd servers to ~/.config/dot/config.toml:");
                 println!();
                 println!("  [mcp.my-server]");
-                println!("  command = [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/tmp\"]");
+                println!(
+                    "  command = [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/tmp\"]"
+                );
                 println!("  enabled = true");
                 return Ok(());
             }
@@ -89,11 +91,14 @@ async fn main() -> Result<()> {
             let creds = dot::auth::Credentials::load()?;
             let db = dot::db::Db::open().context("opening database")?;
             let providers = build_providers(&config, &creds)?;
-
             let tools = build_tool_registry(&config);
             let profiles = build_agent_profiles(&config);
-
-            dot::tui::run(config, providers, db, tools, profiles).await?;
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let resume_id = cli.session.clone();
+            dot::tui::run(config, providers, db, tools, profiles, cwd, resume_id).await?;
         }
     }
     Ok(())

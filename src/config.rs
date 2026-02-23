@@ -9,9 +9,27 @@ pub struct Config {
     pub default_model: String,
     pub theme: ThemeConfig,
     #[serde(default)]
+    pub context: ContextConfig,
+    #[serde(default)]
     pub mcp: HashMap<String, McpServerConfig>,
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextConfig {
+    #[serde(default = "default_true")]
+    pub auto_load_global: bool,
+    #[serde(default = "default_true")]
+    pub auto_load_project: bool,
+}
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            auto_load_global: true,
+            auto_load_project: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +77,8 @@ impl Default for Config {
             theme: ThemeConfig {
                 name: "dark".to_string(),
             },
+            context: ContextConfig::default(),
+
             mcp: HashMap::new(),
             agents: HashMap::new(),
         }

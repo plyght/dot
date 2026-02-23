@@ -26,7 +26,7 @@ use crate::provider::{
 pub struct OpenAIProvider {
     client: Client<OpenAIConfig>,
     model: String,
-    cached_models: tokio::sync::Mutex<Option<Vec<String>>>,
+    cached_models: std::sync::Mutex<Option<Vec<String>>>,
 }
 
 impl OpenAIProvider {
@@ -34,14 +34,14 @@ impl OpenAIProvider {
         Self {
             client: Client::new(),
             model: model.into(),
-            cached_models: tokio::sync::Mutex::new(None),
+            cached_models: std::sync::Mutex::new(None),
         }
     }
     pub fn new_with_config(config: OpenAIConfig, model: impl Into<String>) -> Self {
         Self {
             client: Client::with_config(config),
             model: model.into(),
-            cached_models: tokio::sync::Mutex::new(None),
+            cached_models: std::sync::Mutex::new(None),
         }
     }
 }
@@ -221,17 +221,8 @@ impl Provider for OpenAIProvider {
     }
 
     fn available_models(&self) -> Vec<String> {
-        let cache = self.cached_models.blocking_lock();
-        cache.clone().unwrap_or_else(|| {
-            vec![
-                "gpt-4o".to_string(),
-                "gpt-4o-mini".to_string(),
-                "gpt-4-turbo".to_string(),
-                "o1".to_string(),
-                "o1-mini".to_string(),
-                "o3-mini".to_string(),
-            ]
-        })
+        let cache = self.cached_models.lock().unwrap();
+        cache.clone().unwrap_or_default()
     }
 
     fn fetch_models(
@@ -240,7 +231,7 @@ impl Provider for OpenAIProvider {
         let client = self.client.clone();
         Box::pin(async move {
             {
-                let cache = self.cached_models.lock().await;
+                let cache = self.cached_models.lock().unwrap();
                 if let Some(ref models) = *cache {
                     return Ok(models.clone());
                 }
@@ -265,17 +256,16 @@ impl Provider for OpenAIProvider {
                     models.dedup();
 
                     if models.is_empty() {
-                        return Ok(self.available_models());
+                        return Err(anyhow::anyhow!(
+                            "OpenAI models API returned no matching models"
+                        ));
                     }
 
-                    let mut cache = self.cached_models.lock().await;
+                    let mut cache = self.cached_models.lock().unwrap();
                     *cache = Some(models.clone());
                     Ok(models)
                 }
-                Err(e) => {
-                    warn!("Failed to fetch OpenAI models: {e}");
-                    Ok(self.available_models())
-                }
+                Err(e) => Err(anyhow::anyhow!("Failed to fetch OpenAI models: {e}")),
             }
         })
     }
@@ -286,6 +276,7 @@ impl Provider for OpenAIProvider {
         system: Option<&str>,
         tools: &[ToolDefinition],
         max_tokens: u32,
+        _thinking_budget: u32,
     ) -> Pin<
         Box<dyn Future<Output = anyhow::Result<mpsc::UnboundedReceiver<StreamEvent>>> + Send + '_>,
     > {

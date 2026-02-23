@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     title TEXT,
     model TEXT NOT NULL,
     provider TEXT NOT NULL,
+    cwd TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )";

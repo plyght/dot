@@ -43,8 +43,7 @@ pub fn render_tool_calls(
                     header_spans.push(Span::styled(tc.detail.clone(), theme.dim));
                 }
                 ToolCategory::Mcp { .. } => {
-                    let mcp_tool_name =
-                        tc.name.split('_').skip(1).collect::<Vec<_>>().join("_");
+                    let mcp_tool_name = tc.name.split('_').skip(1).collect::<Vec<_>>().join("_");
                     if !mcp_tool_name.is_empty() {
                         header_spans.push(Span::styled(mcp_tool_name, theme.tool_name));
                         if !tc.detail.is_empty() {
@@ -121,10 +120,7 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
     if has_completed_tools && !has_text {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(
-                "  \u{25c6} ",
-                Style::default().fg(app.theme.accent),
-            ),
+            Span::styled("  \u{25c6} ", Style::default().fg(app.theme.accent)),
             Span::styled("Assistant", app.theme.assistant_label),
         ]));
         render_tool_calls(&app.current_tool_calls, &app.theme, lines);
@@ -134,10 +130,7 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
         if !has_completed_tools {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  \u{25c6} ",
-                    Style::default().fg(app.theme.accent),
-                ),
+                Span::styled("  \u{25c6} ", Style::default().fg(app.theme.accent)),
                 Span::styled("Assistant", app.theme.assistant_label),
             ]));
         }
@@ -148,7 +141,7 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
         }
 
         let md_lines =
-            markdown::render_markdown(&app.current_response, &app.theme, width);
+            markdown::render_markdown(&app.current_response, &app.theme, width.saturating_sub(4));
         for line in md_lines {
             let mut padded = vec![Span::raw("    ")];
             padded.extend(line.spans);
@@ -164,10 +157,7 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
         if !has_completed_tools {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  \u{25c6} ",
-                    Style::default().fg(app.theme.accent),
-                ),
+                Span::styled("  \u{25c6} ", Style::default().fg(app.theme.accent)),
                 Span::styled("Assistant", app.theme.assistant_label),
             ]));
         }
@@ -193,14 +183,10 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
                     tool_spans.push(Span::styled(detail, app.theme.tool_path));
                 }
                 ToolCategory::Command => {
-                    tool_spans.push(Span::styled(
-                        format!("$ {}", detail),
-                        app.theme.dim,
-                    ));
+                    tool_spans.push(Span::styled(format!("$ {}", detail), app.theme.dim));
                 }
                 ToolCategory::Mcp { .. } => {
-                    let mcp_tool =
-                        tool_name.split('_').skip(1).collect::<Vec<_>>().join("_");
+                    let mcp_tool = tool_name.split('_').skip(1).collect::<Vec<_>>().join("_");
                     tool_spans.push(Span::styled(mcp_tool, app.theme.tool_name));
                     if !detail.is_empty() {
                         tool_spans.push(Span::raw(" "));
@@ -225,24 +211,35 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
         lines.push(Line::from(tool_spans));
     } else if !has_completed_tools {
         lines.push(Line::from(""));
-
-        let braille =
-            ["\u{2840}", "\u{2844}", "\u{2846}", "\u{2847}", "\u{2843}", "\u{2841}"];
+        let braille = [
+            "\u{2840}", "\u{2844}", "\u{2846}", "\u{2847}", "\u{2843}", "\u{2841}",
+        ];
         let idx = (app.tick_count / 2 % braille.len() as u64) as usize;
-
+        let has_live_thinking = !app.current_thinking.is_empty();
         let mut thinking_spans = vec![
             Span::styled(format!("    {} ", braille[idx]), app.theme.thinking),
             Span::styled("thinking", app.theme.thinking),
         ];
-
         if let Some(elapsed) = app.streaming_elapsed_secs() {
             thinking_spans.push(Span::styled(
                 format!(" {}", super::ui::format_elapsed(elapsed)),
                 app.theme.dim,
             ));
         }
+        if has_live_thinking {
+            thinking_spans.push(Span::styled("  [t]", app.theme.dim));
+        }
 
         lines.push(Line::from(thinking_spans));
+        if has_live_thinking && app.thinking_expanded {
+            let thinking = app.current_thinking.clone();
+            for text_line in thinking.lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("    \u{2502} ", app.theme.thinking),
+                    Span::styled(text_line.to_string(), app.theme.dim),
+                ]));
+            }
+        }
     }
 }
 

@@ -19,6 +19,7 @@ pub struct ConversationSummary {
     pub title: Option<String>,
     pub model: String,
     pub provider: String,
+    pub cwd: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -29,6 +30,7 @@ pub struct Conversation {
     pub title: Option<String>,
     pub model: String,
     pub provider: String,
+    pub cwd: String,
     pub created_at: String,
     pub updated_at: String,
     pub messages: Vec<DbMessage>,
@@ -79,18 +81,24 @@ impl Db {
                 schema::CREATE_TOOL_CALLS,
             ))
             .context("Failed to initialize database schema")?;
+
+        let _ = self.conn.execute(
+            "ALTER TABLE conversations ADD COLUMN cwd TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+
         tracing::debug!("Database schema initialized");
         Ok(())
     }
 
-    pub fn create_conversation(&self, model: &str, provider: &str) -> Result<String> {
+    pub fn create_conversation(&self, model: &str, provider: &str, cwd: &str) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         self.conn
             .execute(
-                "INSERT INTO conversations (id, title, model, provider, created_at, updated_at) \
-                 VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
-                params![id, model, provider, now, now],
+                "INSERT INTO conversations (id, title, model, provider, cwd, created_at, updated_at) \
+                 VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6)",
+                params![id, model, provider, cwd, now, now],
             )
             .context("Failed to create conversation")?;
         tracing::debug!("Created conversation {}", id);
@@ -101,7 +109,7 @@ impl Db {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, title, model, provider, created_at, updated_at \
+                "SELECT id, title, model, provider, cwd, created_at, updated_at \
                  FROM conversations ORDER BY updated_at DESC LIMIT ?1",
             )
             .context("Failed to prepare list_conversations query")?;
@@ -113,11 +121,46 @@ impl Db {
                     title: row.get(1)?,
                     model: row.get(2)?,
                     provider: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    cwd: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             })
             .context("Failed to list conversations")?;
+
+        let mut conversations = Vec::new();
+        for row in rows {
+            conversations.push(row.context("Failed to read conversation row")?);
+        }
+        Ok(conversations)
+    }
+
+    pub fn list_conversations_for_cwd(
+        &self,
+        cwd: &str,
+        limit: usize,
+    ) -> Result<Vec<ConversationSummary>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, title, model, provider, cwd, created_at, updated_at \
+                 FROM conversations WHERE cwd = ?1 ORDER BY updated_at DESC LIMIT ?2",
+            )
+            .context("Failed to prepare list_conversations_for_cwd query")?;
+
+        let rows = stmt
+            .query_map(params![cwd, limit as i64], |row| {
+                Ok(ConversationSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    model: row.get(2)?,
+                    provider: row.get(3)?,
+                    cwd: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            })
+            .context("Failed to list conversations for cwd")?;
 
         let mut conversations = Vec::new();
         for row in rows {
@@ -130,7 +173,7 @@ impl Db {
         let summary: ConversationSummary = self
             .conn
             .query_row(
-                "SELECT id, title, model, provider, created_at, updated_at \
+                "SELECT id, title, model, provider, cwd, created_at, updated_at \
                  FROM conversations WHERE id = ?1",
                 params![id],
                 |row| {
@@ -139,8 +182,9 @@ impl Db {
                         title: row.get(1)?,
                         model: row.get(2)?,
                         provider: row.get(3)?,
-                        created_at: row.get(4)?,
-                        updated_at: row.get(5)?,
+                        cwd: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
                     })
                 },
             )
@@ -152,6 +196,7 @@ impl Db {
             title: summary.title,
             model: summary.model,
             provider: summary.provider,
+            cwd: summary.cwd,
             created_at: summary.created_at,
             updated_at: summary.updated_at,
             messages,

@@ -416,7 +416,7 @@ async fn oauth_pkce_flow(create_key: bool) -> Result<ProviderCredential> {
     } else {
         let expires_at = token
             .expires_in
-            .map(|e| chrono::Utc::now().timestamp_millis() + (e as i64) * 1000);
+            .map(|e| chrono::Utc::now().timestamp() + (e as i64));
         Ok(ProviderCredential::OAuth {
             access_token: token.access_token,
             refresh_token: token.refresh_token,
