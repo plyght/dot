@@ -233,65 +233,64 @@ impl Theme {
     }
 
     pub fn terminal() -> Self {
-        let black = Color::Indexed(0);
         let red = Color::Indexed(1);
         let green = Color::Indexed(2);
         let yellow = Color::Indexed(3);
-        let blue = Color::Indexed(4);
         let magenta = Color::Indexed(5);
         let cyan = Color::Indexed(6);
-        let white = Color::Indexed(7);
         let bright_black = Color::Indexed(8);
-        let bright_white = Color::Indexed(15);
+
+        let fg = Color::Reset;
+        let dim = Style::default().fg(bright_black);
+        let bold = Style::default().add_modifier(Modifier::BOLD);
 
         Self {
             bg: Color::Reset,
-            fg: Color::Reset,
-            dim: Style::default().fg(bright_black),
-            accent: blue,
+            fg,
+            dim,
+            accent: fg,
             muted_fg: bright_black,
             user_label: Style::default().fg(magenta).add_modifier(Modifier::BOLD),
-            assistant_label: Style::default().fg(blue).add_modifier(Modifier::BOLD),
-            border: Style::default().fg(bright_black),
-            input_prompt: Style::default().fg(blue),
-            status_bar: Style::default().fg(bright_black),
+            assistant_label: bold,
+            border: dim,
+            input_prompt: bold,
+            status_bar: dim,
             code_bg: Color::Reset,
             inline_code: Style::default().fg(yellow),
             error: Style::default().fg(red),
-            tool_name: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-            tool_output: Style::default().fg(bright_black),
+            tool_name: Style::default().add_modifier(Modifier::BOLD),
+            tool_output: dim,
             tool_success: Style::default().fg(green),
-            heading: Style::default().fg(blue).add_modifier(Modifier::BOLD),
-            bold: Style::default().add_modifier(Modifier::BOLD),
+            heading: Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            bold,
             italic: Style::default().add_modifier(Modifier::ITALIC),
-            blockquote: Style::default().fg(bright_black),
+            blockquote: dim,
             link: Style::default()
                 .fg(cyan)
                 .add_modifier(Modifier::UNDERLINED),
-            list_bullet: Style::default().fg(bright_black),
-            scrollbar_track: Style::default().fg(bright_black),
-            scrollbar_thumb: Style::default().fg(white),
-            highlight: Style::default().fg(black).bg(blue),
+            list_bullet: dim,
+            scrollbar_track: dim,
+            scrollbar_thumb: Style::default().fg(fg),
+            highlight: Style::default()
+                .add_modifier(Modifier::REVERSED),
             tool_file_read: Style::default().fg(cyan),
             tool_file_write: Style::default().fg(yellow),
-            tool_directory: Style::default().fg(blue),
+            tool_directory: bold,
             tool_search: Style::default().fg(magenta),
             tool_command: Style::default().fg(green),
             tool_mcp: Style::default().fg(cyan),
             tool_skill: Style::default().fg(magenta),
             tool_badge_bg: bright_black,
-            tool_path: Style::default()
-                .fg(bright_white)
-                .add_modifier(Modifier::UNDERLINED),
-            thinking: Style::default().fg(bright_black),
-            mode_normal_fg: black,
+            tool_path: Style::default().add_modifier(Modifier::UNDERLINED),
+            thinking: dim,
+            mode_normal_fg: Color::Reset,
             mode_normal_bg: bright_black,
-            mode_insert_fg: black,
-            mode_insert_bg: blue,
-            cost: Style::default().fg(yellow),
+            mode_insert_fg: Color::Indexed(0),
+            mode_insert_bg: Color::Reset,
+            cost: dim,
             user_text: Style::default(),
-            tool_action: Style::default().fg(bright_black),
-            separator: Style::default().fg(bright_black),
+            tool_action: dim,
+            separator: dim,
             tool_exit_ok: Style::default().fg(green),
             tool_exit_err: Style::default().fg(red),
             syntect_theme: None,
@@ -301,6 +300,6 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::dark()
+        Self::terminal()
     }
 }

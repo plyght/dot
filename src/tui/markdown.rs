@@ -177,10 +177,7 @@ fn render_code_block(
         format!(" {} ", lang)
     };
     if !label.is_empty() {
-        output.push(Line::from(Span::styled(
-            label,
-            Style::default().fg(Color::DarkGray),
-        )));
+        output.push(Line::from(Span::styled(label, theme.dim)));
     }
 
     if let Some(syntect_theme_name) = theme.syntect_theme
@@ -208,7 +205,7 @@ fn render_code_block(
                 Err(_) => {
                     output.push(Line::from(Span::styled(
                         format!("  {}", line),
-                        Style::default().fg(Color::White).bg(theme.code_bg),
+                        Style::default().fg(theme.fg).bg(theme.code_bg),
                     )));
                 }
             }
@@ -220,7 +217,7 @@ fn render_code_block(
             )));
         }
     } else {
-        let code_style = Style::default().fg(Color::White).bg(theme.code_bg);
+        let code_style = Style::default().fg(theme.fg).bg(theme.code_bg);
         for line in code_lines {
             output.push(Line::from(Span::styled(format!("  {}", line), code_style)));
         }

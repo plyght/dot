@@ -89,7 +89,7 @@ impl Default for Config {
             default_provider: "anthropic".to_string(),
             default_model: "claude-sonnet-4-20250514".to_string(),
             theme: ThemeConfig {
-                name: "dark".to_string(),
+                name: "terminal".to_string(),
             },
             context: ContextConfig::default(),
 
