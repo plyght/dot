@@ -54,6 +54,10 @@ pub fn handle_paste(app: &mut App, text: String) -> InputAction {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
+    if app.selection.anchor.is_some() {
+        app.selection.clear();
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if app.model_selector.visible {
             app.model_selector.close();
@@ -542,6 +546,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
 
     match mouse.kind {
         MouseEventKind::ScrollUp => {
+            app.selection.clear();
             if app.model_selector.visible
                 && let Some(popup) = app.layout.model_selector
                 && rect_contains(popup, col, row)
@@ -552,6 +557,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
             InputAction::ScrollUp(3)
         }
         MouseEventKind::ScrollDown => {
+            app.selection.clear();
             if app.model_selector.visible
                 && let Some(popup) = app.layout.model_selector
                 && rect_contains(popup, col, row)
@@ -562,6 +568,10 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
             InputAction::ScrollDown(3)
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            if app.selection.anchor.is_some() && !app.selection.active {
+                app.selection.clear();
+            }
+
             if app.model_selector.visible
                 && let Some(popup) = app.layout.model_selector
             {
@@ -650,6 +660,13 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                 app.cursor_pos = target_offset;
                 InputAction::None
             } else if rect_contains(app.layout.messages, col, row) {
+                let content_y = app.layout.messages.y + 1;
+                if row >= content_y {
+                    let content_col = col.saturating_sub(app.layout.messages.x);
+                    let content_row = row - content_y;
+                    let visual_row = app.scroll_offset + content_row;
+                    app.selection.start(content_col, visual_row);
+                }
                 if app.vim_mode && app.mode == AppMode::Insert && app.input.is_empty() {
                     app.mode = AppMode::Normal;
                 }
@@ -657,6 +674,46 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
             } else {
                 InputAction::None
             }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if app.selection.active {
+                let content_y = app.layout.messages.y + 1;
+                let content_height = app.layout.messages.height.saturating_sub(1);
+                let content_col = col.saturating_sub(app.layout.messages.x);
+                let content_row = if row >= content_y {
+                    (row - content_y).min(content_height.saturating_sub(1))
+                } else {
+                    0
+                };
+                let visual_row = app.scroll_offset + content_row;
+                app.selection.update(content_col, visual_row);
+            }
+            InputAction::None
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if app.selection.active {
+                let content_y = app.layout.messages.y + 1;
+                let content_height = app.layout.messages.height.saturating_sub(1);
+                let content_col = col.saturating_sub(app.layout.messages.x);
+                let content_row = if row >= content_y {
+                    (row - content_y).min(content_height.saturating_sub(1))
+                } else {
+                    0
+                };
+                let visual_row = app.scroll_offset + content_row;
+                app.selection.update(content_col, visual_row);
+                app.selection.active = false;
+                if !app.selection.is_empty_selection() {
+                    if let Some(text) = app.extract_selected_text() {
+                        if !text.trim().is_empty() {
+                            crate::tui::app::copy_to_clipboard(&text);
+                        }
+                    }
+                } else {
+                    app.selection.clear();
+                }
+            }
+            InputAction::None
         }
         _ => InputAction::None,
     }

@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -11,6 +11,10 @@ use crate::tui::markdown;
 use crate::tui::theme::Theme;
 use crate::tui::ui_popups;
 use crate::tui::ui_tools;
+
+fn is_compact(w: u16) -> bool {
+    w < 60
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let input_height = app.input_height();
@@ -60,6 +64,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+    let compact = is_compact(area.width);
     let sep = Span::styled(" \u{00b7} ", app.theme.separator);
 
     let title_text = app
@@ -67,30 +72,26 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .as_deref()
         .unwrap_or("new conversation");
 
-    let mut left_spans = vec![Span::styled(
-        format!(" {}", title_text),
-        Style::default().fg(app.theme.accent),
-    )];
-
-    let show_agent = !app.agent_name.is_empty()
-        && app.agent_name != "default"
-        && app.agent_name != "dot";
-    if show_agent {
-        left_spans.push(sep.clone());
-        left_spans.push(Span::styled(
-            format!("@{}", app.agent_name),
-            app.theme.status_bar,
-        ));
-    }
-
-    let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
-
     let model_short = shorten_model(&app.model_name);
     let mut right_spans: Vec<Span<'static>> = Vec::new();
 
-    right_spans.push(Span::styled(model_short, app.theme.dim));
+    let model_display: String = if compact {
+        let s = model_short;
+        if s.chars().count() > 14 {
+            let t: String = s.chars().take(13).collect();
+            format!("{}\u{2026}", t)
+        } else {
+            s
+        }
+    } else {
+        model_short
+    };
 
-    if app.thinking_budget > 0 {
+    if !compact || area.width >= 40 {
+        right_spans.push(Span::styled(model_display, app.theme.dim));
+    }
+
+    if app.thinking_budget > 0 && !compact {
         right_spans.push(sep.clone());
         right_spans.push(Span::styled(
             format!("\u{25c7}{}", app.thinking_level().label()),
@@ -100,15 +101,20 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 
     if app.vim_mode {
         right_spans.push(Span::raw(" "));
+        let (normal_label, insert_label) = if compact {
+            (" N ", " I ")
+        } else {
+            (" NORMAL ", " INSERT ")
+        };
         right_spans.push(match app.mode {
             AppMode::Normal => Span::styled(
-                " NORMAL ",
+                normal_label,
                 Style::default()
                     .fg(app.theme.mode_normal_fg)
                     .bg(app.theme.mode_normal_bg),
             ),
             AppMode::Insert => Span::styled(
-                " INSERT ",
+                insert_label,
                 Style::default()
                     .fg(app.theme.mode_insert_fg)
                     .bg(app.theme.mode_insert_bg),
@@ -124,6 +130,43 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
+
+    let show_agent = !compact
+        && !app.agent_name.is_empty()
+        && app.agent_name != "default"
+        && app.agent_name != "dot";
+
+    let agent_width = if show_agent {
+        3 + app.agent_name.chars().count()
+    } else {
+        0
+    };
+
+    let max_title = (area.width as usize).saturating_sub(right_width + agent_width + 3);
+    let display_title = if title_text.chars().count() > max_title && max_title > 2 {
+        let t: String = title_text
+            .chars()
+            .take(max_title.saturating_sub(1))
+            .collect();
+        format!("{}\u{2026}", t)
+    } else {
+        title_text.to_string()
+    };
+
+    let mut left_spans = vec![Span::styled(
+        format!(" {}", display_title),
+        Style::default().fg(app.theme.accent),
+    )];
+
+    if show_agent {
+        left_spans.push(sep.clone());
+        left_spans.push(Span::styled(
+            format!("@{}", app.agent_name),
+            app.theme.status_bar,
+        ));
+    }
+
+    let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
     let gap = (area.width as usize).saturating_sub(left_width + right_width + 1);
 
     let mut spans = left_spans;
@@ -135,10 +178,11 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
+    let lpad: u16 = if is_compact(area.width) { 0 } else { 1 };
     let inner = Rect {
-        x: area.x + 1,
+        x: area.x + lpad,
         y: area.y,
-        width: area.width.saturating_sub(3),
+        width: area.width.saturating_sub(lpad + 2),
         height: area.height,
     };
 
@@ -167,7 +211,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     if all_lines.is_empty() {
-        all_lines.extend(ui_popups::draw_empty_state(app));
+        all_lines.extend(ui_popups::draw_empty_state(app, inner.width));
     }
 
     let total_visual: u32 = all_lines
@@ -190,6 +234,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         app.scroll_offset = app.max_scroll;
     }
 
+    app.content_width = area.width;
+    app.visual_lines = compute_visual_lines(&all_lines, area.width);
+
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(app.theme.border);
@@ -200,6 +247,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((app.scroll_offset, 0));
 
     frame.render_widget(paragraph, area);
+
+    render_selection_highlight(frame, app, area);
 
     if app.max_scroll > 0 {
         let scrollbar_area = Rect {
@@ -229,60 +278,83 @@ fn render_message(
     inner_width: u16,
     lines: &mut Vec<Line<'static>>,
 ) {
+    let compact = inner_width < 55;
+    let body_indent: &str = if compact { "  " } else { "    " };
+    let body_indent_cols: u16 = if compact { 2 } else { 4 };
+
     lines.push(Line::from(""));
 
     match msg.role.as_str() {
         "user" => {
+            let (bullet, cont) = if compact {
+                (" \u{25cf} ", "   ")
+            } else {
+                ("  \u{25cf} ", "    ")
+            };
             let mut content_lines = msg.content.lines();
             if let Some(first) = content_lines.next() {
                 lines.push(Line::from(vec![
-                    Span::styled("  \u{25cf} ", Style::default().fg(theme.muted_fg)),
+                    Span::styled(bullet, Style::default().fg(theme.muted_fg)),
                     Span::styled(first.to_string(), theme.user_text),
                 ]));
             }
             for text_line in content_lines {
                 lines.push(Line::from(Span::styled(
-                    format!("    {}", text_line),
+                    format!("{}{}", cont, text_line),
                     theme.user_text,
                 )));
             }
         }
         "compact" => {
+            let pad = if compact { " " } else { "  " };
             for text_line in msg.content.lines() {
                 lines.push(Line::from(vec![
-                    Span::styled("  ", theme.thinking),
+                    Span::styled(pad, theme.thinking),
                     Span::styled(text_line.to_string(), theme.dim),
                 ]));
             }
         }
         _ => {
-            let model_label = msg
-                .model
-                .as_deref()
-                .map(shorten_model)
-                .unwrap_or_default();
+            let (diamond, diamond_sp) = if compact {
+                (" \u{25c6}", " \u{25c6} ")
+            } else {
+                ("  \u{25c6}", "  \u{25c6} ")
+            };
+            let model_label = msg.model.as_deref().map(shorten_model).unwrap_or_default();
             if model_label.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    "  \u{25c6}",
+                    diamond,
                     Style::default().fg(theme.accent),
                 )));
             } else {
                 lines.push(Line::from(vec![
-                    Span::styled("  \u{25c6} ", Style::default().fg(theme.accent)),
+                    Span::styled(diamond_sp, Style::default().fg(theme.accent)),
                     Span::styled(model_label, theme.dim),
                 ]));
             }
             if let Some(ref thinking) = msg.thinking {
-                render_thinking_block(thinking, thinking_expanded, theme, lines);
+                render_thinking_block(thinking, thinking_expanded, theme, compact, lines);
             }
-            let md_lines =
-                markdown::render_markdown(&msg.content, theme, inner_width.saturating_sub(4));
+            if !msg.tool_calls.is_empty() {
+                if msg.content.is_empty() {
+                    ui_tools::render_tool_calls(&msg.tool_calls, theme, compact, lines);
+                } else {
+                    ui_tools::render_tool_calls_compact(&msg.tool_calls, theme, compact, lines);
+                }
+                if !msg.content.is_empty() {
+                    lines.push(Line::from(""));
+                }
+            }
+            let md_lines = markdown::render_markdown(
+                &msg.content,
+                theme,
+                inner_width.saturating_sub(body_indent_cols),
+            );
             for line in md_lines {
-                let mut padded = vec![Span::raw("    ")];
+                let mut padded = vec![Span::raw(body_indent)];
                 padded.extend(line.spans);
                 lines.push(Line::from(padded));
             }
-            ui_tools::render_tool_calls(&msg.tool_calls, theme, lines);
         }
     }
 }
@@ -291,12 +363,14 @@ fn render_thinking_block(
     thinking: &str,
     expanded: bool,
     theme: &crate::tui::theme::Theme,
+    compact: bool,
     lines: &mut Vec<Line<'static>>,
 ) {
+    let pad = if compact { "  " } else { "    " };
     let word_count = thinking.split_whitespace().count();
     if expanded {
         lines.push(Line::from(vec![
-            Span::styled("    \u{25be} ", theme.thinking),
+            Span::styled(format!("{}\u{25be} ", pad), theme.thinking),
             Span::styled(
                 "thinking",
                 Style::default()
@@ -307,7 +381,7 @@ fn render_thinking_block(
         ]));
         for text_line in thinking.lines() {
             lines.push(Line::from(vec![
-                Span::styled("    \u{2502} ", theme.thinking),
+                Span::styled(format!("{}\u{2502} ", pad), theme.thinking),
                 Span::styled(
                     text_line.to_string(),
                     Style::default()
@@ -316,7 +390,7 @@ fn render_thinking_block(
                 ),
             ]));
         }
-        lines.push(Line::from(Span::styled("    ", theme.thinking)));
+        lines.push(Line::from(Span::styled(pad.to_string(), theme.thinking)));
     } else {
         let hint = if word_count > 10 {
             format!(" \u{00b7} {}w", word_count)
@@ -324,7 +398,7 @@ fn render_thinking_block(
             String::new()
         };
         lines.push(Line::from(vec![
-            Span::styled("    \u{25b8} ", theme.thinking),
+            Span::styled(format!("{}\u{25b8} ", pad), theme.thinking),
             Span::styled(
                 "thinking",
                 Style::default()
@@ -475,14 +549,23 @@ fn cursor_position(input: &str, byte_pos: usize, area: Rect) -> (u16, u16) {
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let mut left_spans: Vec<Span<'static>> = vec![Span::styled(
+    let compact = is_compact(area.width);
+
+    let token_text = if compact {
+        format!(
+            " {}i\u{00b7}{}o",
+            format_tokens(app.usage.input_tokens),
+            format_tokens(app.usage.output_tokens),
+        )
+    } else {
         format!(
             " {}in \u{00b7} {}out",
             format_tokens(app.usage.input_tokens),
             format_tokens(app.usage.output_tokens),
-        ),
-        app.theme.status_bar,
-    )];
+        )
+    };
+
+    let mut left_spans: Vec<Span<'static>> = vec![Span::styled(token_text, app.theme.status_bar)];
 
     if app.usage.total_cost > 0.0 {
         left_spans.push(Span::styled(
@@ -492,8 +575,13 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if !app.follow_bottom && app.is_streaming {
+        let new_label = if compact {
+            " \u{2193}"
+        } else {
+            " \u{2193} new content"
+        };
         left_spans.push(Span::styled(
-            " \u{2193} new content",
+            new_label,
             Style::default().fg(app.theme.accent),
         ));
     }
@@ -517,11 +605,17 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         || app.session_selector.visible
         || app.help_popup.visible
     {
-        "\u{2191}\u{2193} enter esc "
+        if compact {
+            "\u{2191}\u{2193} \u{23ce} esc "
+        } else {
+            "\u{2191}\u{2193} enter esc "
+        }
     } else if app.is_streaming {
-        "^C cancel "
+        "^C "
     } else if app.vim_mode && app.mode == AppMode::Normal {
         "i j/k q "
+    } else if compact {
+        "? "
     } else {
         "? help "
     };
@@ -569,5 +663,60 @@ fn format_tokens(n: u32) -> String {
         format!("{:.1}k", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+fn compute_visual_lines(lines: &[Line], width: u16) -> Vec<String> {
+    let mut visual = Vec::new();
+    for line in lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let chars: Vec<char> = text.chars().collect();
+        if chars.is_empty() || width == 0 {
+            visual.push(String::new());
+        } else {
+            for chunk in chars.chunks(width as usize) {
+                visual.push(chunk.iter().collect());
+            }
+        }
+    }
+    visual
+}
+
+fn render_selection_highlight(frame: &mut Frame, app: &App, area: Rect) {
+    let range = match app.selection.ordered() {
+        Some(r) => r,
+        None => return,
+    };
+    let ((sc, sr), (ec, er)) = range;
+
+    let content_y = area.y + 1;
+    let content_height = area.height.saturating_sub(1);
+    let scroll = app.scroll_offset;
+
+    let buf = frame.buffer_mut();
+
+    for vis_row in sr..=er {
+        if vis_row < scroll {
+            continue;
+        }
+        let screen_row_offset = vis_row - scroll;
+        if screen_row_offset >= content_height {
+            break;
+        }
+        let screen_y = content_y + screen_row_offset;
+
+        let row_start = if vis_row == sr { sc } else { 0 };
+        let row_end = if vis_row == er { ec } else { area.width };
+
+        for screen_col in row_start..row_end {
+            let screen_x = area.x + screen_col;
+            if screen_x >= area.x + area.width {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut(Position::new(screen_x, screen_y)) {
+                let current = cell.style();
+                cell.set_style(current.add_modifier(Modifier::REVERSED));
+            }
+        }
     }
 }

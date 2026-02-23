@@ -46,13 +46,15 @@ impl EventHandler {
                                 }
                             }
                             Some(Ok(CEvent::Mouse(mouse))) => {
-                                let dominated = matches!(
+                                let forward = matches!(
                                     mouse.kind,
                                     MouseEventKind::Down(_)
+                                        | MouseEventKind::Up(_)
+                                        | MouseEventKind::Drag(_)
                                         | MouseEventKind::ScrollUp
                                         | MouseEventKind::ScrollDown
                                 );
-                                if dominated
+                                if forward
                                     && event_tx.send(AppEvent::Mouse(mouse)).is_err()
                                 {
                                     return;

@@ -215,50 +215,60 @@ pub fn draw_command_palette(frame: &mut Frame, app: &mut App, input_area: Rect) 
         })
         .collect();
 
-    let width = items
+    let content_width = items
         .iter()
         .map(|(n, d, s)| n.len() + d.len() + s.len() + 12)
         .max()
         .unwrap_or(20) as u16;
-    let height = items.len() as u16;
+    let content_height = items.len() as u16;
 
-    let popup_y = input_area.y.saturating_sub(height + 1);
-    let popup = Rect::new(
-        input_area.x + 1,
-        popup_y,
-        width.min(input_area.width.saturating_sub(2)),
-        height,
-    );
+    let box_width = (content_width + 2).min(input_area.width.saturating_sub(2));
+    let box_height = content_height + 2;
+
+    let popup_y = input_area.y.saturating_sub(box_height);
+    let popup = Rect::new(input_area.x + 1, popup_y, box_width, box_height);
 
     app.layout.command_palette = Some(popup);
 
     frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.muted_fg));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let compact = popup.width < 50;
+    let (name_w, desc_w) = if compact { (8, 16) } else { (10, 24) };
 
     let mut cmd_lines: Vec<Line<'static>> = Vec::new();
     for (i, (name, desc, shortcut)) in items.iter().enumerate() {
         let is_sel = i == palette.selected;
         let mut spans = if is_sel {
             vec![
-                Span::styled("\u{25b8} ", Style::default().fg(app.theme.accent)),
+                Span::styled(" \u{25b8} ", Style::default().fg(app.theme.accent)),
                 Span::styled(
-                    format!("/{:<10}", name),
+                    format!("/{:<width$}", name, width = name_w),
                     Style::default()
                         .fg(app.theme.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("{:<24}", desc),
+                    format!("{:<width$}", desc, width = desc_w),
                     Style::default().fg(app.theme.accent),
                 ),
             ]
         } else {
             vec![
-                Span::raw("  "),
-                Span::styled(format!("/{:<10}", name), Style::default().fg(Color::Reset)),
-                Span::styled(format!("{:<24}", desc), app.theme.dim),
+                Span::raw("   "),
+                Span::styled(
+                    format!("/{:<width$}", name, width = name_w),
+                    Style::default().fg(Color::Reset),
+                ),
+                Span::styled(format!("{:<width$}", desc, width = desc_w), app.theme.dim),
             ]
         };
-        if !shortcut.is_empty() {
+        if !shortcut.is_empty() && !compact {
             spans.push(Span::styled(
                 shortcut.to_string(),
                 Style::default().fg(app.theme.muted_fg),
@@ -267,50 +277,70 @@ pub fn draw_command_palette(frame: &mut Frame, app: &mut App, input_area: Rect) 
         cmd_lines.push(Line::from(spans));
     }
 
-    frame.render_widget(Paragraph::new(cmd_lines), popup);
+    frame.render_widget(Paragraph::new(cmd_lines), inner);
 }
 
-pub fn draw_empty_state(app: &App) -> Vec<Line<'static>> {
+pub fn draw_empty_state(app: &App, width: u16) -> Vec<Line<'static>> {
     let accent = app.theme.accent;
     let dim = app.theme.dim;
     let border_style = app.theme.border;
     let muted = app.theme.muted_fg;
-    let sep_width = 32usize;
+    let compact = width < 55;
+    let pad = if compact { "   " } else { "       " };
+    let sep_width = if compact {
+        (width as usize).saturating_sub(6).min(24)
+    } else {
+        32
+    };
     let sep_line = Line::from(Span::styled(
-        format!("       {}", "\u{2500}".repeat(sep_width)),
+        format!("{}{}", pad, "\u{2500}".repeat(sep_width)),
         border_style,
     ));
 
-    vec![
-        Line::from(""),
+    let mut lines = vec![
         Line::from(""),
         Line::from(""),
         Line::from(Span::styled(
-            "       \u{25c6}",
+            format!("{}\u{25c6}", pad),
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "       dot",
+            format!("{}dot", pad),
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         sep_line,
         Line::from(""),
-        Line::from(Span::styled(
-            "       type a message to get started",
+    ];
+
+    if compact {
+        lines.push(Line::from(Span::styled(
+            format!("{}type a message to start", pad),
             dim,
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("       /help", Style::default().fg(muted)),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("{}/help  /model  /sessions", pad),
+            Style::default().fg(muted),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("{}type a message to get started", pad),
+            dim,
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}/help", pad), Style::default().fg(muted)),
             Span::styled("  \u{00b7}  ", dim),
             Span::styled("/model", Style::default().fg(muted)),
             Span::styled("  \u{00b7}  ", dim),
             Span::styled("/sessions", Style::default().fg(muted)),
-        ]),
-        Line::from(""),
-    ]
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines
 }
 
 pub fn draw_thinking_selector(frame: &mut Frame, app: &mut App) {

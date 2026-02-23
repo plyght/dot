@@ -51,6 +51,48 @@ pub struct ImageAttachment {
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 
+#[derive(Default)]
+pub struct TextSelection {
+    pub anchor: Option<(u16, u16)>,
+    pub end: Option<(u16, u16)>,
+    pub active: bool,
+}
+
+impl TextSelection {
+    pub fn start(&mut self, col: u16, visual_row: u16) {
+        self.anchor = Some((col, visual_row));
+        self.end = Some((col, visual_row));
+        self.active = true;
+    }
+
+    pub fn update(&mut self, col: u16, visual_row: u16) {
+        self.end = Some((col, visual_row));
+    }
+
+    pub fn clear(&mut self) {
+        self.anchor = None;
+        self.end = None;
+        self.active = false;
+    }
+
+    pub fn ordered(&self) -> Option<((u16, u16), (u16, u16))> {
+        let a = self.anchor?;
+        let e = self.end?;
+        if a.1 < e.1 || (a.1 == e.1 && a.0 <= e.0) {
+            Some((a, e))
+        } else {
+            Some((e, a))
+        }
+    }
+
+    pub fn is_empty_selection(&self) -> bool {
+        match (self.anchor, self.end) {
+            (Some(a), Some(e)) => a == e,
+            _ => true,
+        }
+    }
+}
+
 pub fn media_type_for_path(path: &str) -> Option<String> {
     let ext = Path::new(path).extension()?.to_str()?.to_lowercase();
     match ext.as_str() {
@@ -134,6 +176,10 @@ pub struct App {
     pub attachments: Vec<ImageAttachment>,
     pub conversation_title: Option<String>,
     pub vim_mode: bool,
+
+    pub selection: TextSelection,
+    pub visual_lines: Vec<String>,
+    pub content_width: u16,
 }
 
 impl App {
@@ -181,6 +227,9 @@ impl App {
             attachments: Vec::new(),
             conversation_title: None,
             vim_mode,
+            selection: TextSelection::default(),
+            visual_lines: Vec::new(),
+            content_width: 0,
         }
     }
 
@@ -477,6 +526,8 @@ impl App {
         self.paste_blocks.clear();
         self.attachments.clear();
         self.conversation_title = None;
+        self.selection.clear();
+        self.visual_lines.clear();
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -535,7 +586,11 @@ impl App {
         let new_end = if trimmed.is_empty() {
             0
         } else if let Some(pos) = trimmed.rfind(|c: char| c.is_whitespace()) {
-            pos + trimmed[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)
+            pos + trimmed[pos..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1)
         } else {
             0
         };
@@ -550,5 +605,72 @@ impl App {
     pub fn delete_to_start(&mut self) {
         self.input.replace_range(..self.cursor_pos, "");
         self.cursor_pos = 0;
+    }
+
+    pub fn extract_selected_text(&self) -> Option<String> {
+        let ((sc, sr), (ec, er)) = self.selection.ordered()?;
+        if self.visual_lines.is_empty() || self.content_width == 0 {
+            return None;
+        }
+        let mut text = String::new();
+        for row in sr..=er {
+            if row as usize >= self.visual_lines.len() {
+                break;
+            }
+            let line = &self.visual_lines[row as usize];
+            let chars: Vec<char> = line.chars().collect();
+            let start_col = if row == sr {
+                (sc as usize).min(chars.len())
+            } else {
+                0
+            };
+            let end_col = if row == er {
+                (ec as usize).min(chars.len())
+            } else {
+                chars.len()
+            };
+            if start_col <= end_col {
+                let s = start_col.min(chars.len());
+                let e = end_col.min(chars.len());
+                text.extend(&chars[s..e]);
+            }
+            if row < er {
+                text.push('\n');
+            }
+        }
+        Some(text)
+    }
+}
+
+pub fn copy_to_clipboard(text: &str) {
+    let encoded =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, text.as_bytes());
+    let osc = format!("\x1b]52;c;{}\x07", encoded);
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), osc.as_bytes());
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::{Command, Stdio};
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = std::io::Write::write_all(stdin, text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::{Command, Stdio};
+        let result = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(Stdio::piped())
+            .spawn();
+        if let Ok(mut child) = result {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = std::io::Write::write_all(stdin, text.as_bytes());
+            }
+            let _ = child.wait();
+        }
     }
 }

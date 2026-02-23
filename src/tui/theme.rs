@@ -265,14 +265,11 @@ impl Theme {
             bold,
             italic: Style::default().add_modifier(Modifier::ITALIC),
             blockquote: dim,
-            link: Style::default()
-                .fg(cyan)
-                .add_modifier(Modifier::UNDERLINED),
+            link: Style::default().fg(cyan).add_modifier(Modifier::UNDERLINED),
             list_bullet: dim,
             scrollbar_track: dim,
             scrollbar_thumb: Style::default().fg(fg),
-            highlight: Style::default()
-                .add_modifier(Modifier::REVERSED),
+            highlight: Style::default().add_modifier(Modifier::REVERSED),
             tool_file_read: Style::default().fg(cyan),
             tool_file_write: Style::default().fg(yellow),
             tool_directory: bold,
