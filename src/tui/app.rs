@@ -36,6 +36,145 @@ pub enum AppMode {
     Insert,
 }
 
+
+pub struct ModelSelector {
+    pub visible: bool,
+    pub models: Vec<String>,
+    pub selected: usize,
+}
+
+impl ModelSelector {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            models: Vec::new(),
+            selected: 0,
+        }
+    }
+
+    pub fn open(&mut self, models: Vec<String>, current: &str) {
+        self.selected = models.iter().position(|m| m == current).unwrap_or(0);
+        self.models = models;
+        self.visible = true;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn down(&mut self) {
+        if self.selected + 1 < self.models.len() {
+            self.selected += 1;
+        }
+    }
+
+    pub fn confirm(&mut self) -> Option<String> {
+        if self.visible {
+            self.visible = false;
+            self.models.get(self.selected).cloned()
+        } else {
+            None
+        }
+    }
+}
+
+
+pub struct SlashCommand {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub description: &'static str,
+}
+
+pub const COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "model",
+        aliases: &["m"],
+        description: "switch model",
+    },
+    SlashCommand {
+        name: "clear",
+        aliases: &["cl"],
+        description: "clear conversation",
+    },
+    SlashCommand {
+        name: "help",
+        aliases: &["h"],
+        description: "show commands",
+    },
+];
+
+pub struct CommandPalette {
+    pub visible: bool,
+    pub selected: usize,
+    pub filtered: Vec<usize>,
+}
+
+impl CommandPalette {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            selected: 0,
+            filtered: Vec::new(),
+        }
+    }
+
+    pub fn update_filter(&mut self, input: &str) {
+        let query = input.strip_prefix('/').unwrap_or(input).to_lowercase();
+        self.filtered = COMMANDS
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| {
+                if query.is_empty() {
+                    return true;
+                }
+                cmd.name.starts_with(&query)
+                    || cmd.aliases.iter().any(|a| a.starts_with(&query))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if self.selected >= self.filtered.len() {
+            self.selected = self.filtered.len().saturating_sub(1);
+        }
+    }
+
+    pub fn open(&mut self, input: &str) {
+        self.visible = true;
+        self.selected = 0;
+        self.update_filter(input);
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn down(&mut self) {
+        if self.selected + 1 < self.filtered.len() {
+            self.selected += 1;
+        }
+    }
+
+    pub fn confirm(&mut self) -> Option<&'static str> {
+        if self.visible && !self.filtered.is_empty() {
+            self.visible = false;
+            Some(COMMANDS[self.filtered[self.selected]].name)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct App {
     pub messages: Vec<ChatMessage>,
     pub input: String,
@@ -55,6 +194,8 @@ pub struct App {
     pub pending_tool_input: String,
     pub current_tool_calls: Vec<ToolCallDisplay>,
     pub error_message: Option<String>,
+    pub model_selector: ModelSelector,
+    pub command_palette: CommandPalette,
 }
 
 impl App {
@@ -77,6 +218,8 @@ impl App {
             pending_tool_input: String::new(),
             current_tool_calls: Vec::new(),
             error_message: None,
+            model_selector: ModelSelector::new(),
+            command_palette: CommandPalette::new(),
         }
     }
 

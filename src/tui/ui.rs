@@ -1,10 +1,10 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::tui::app::{App, AppMode};
+use crate::tui::app::{App, AppMode, COMMANDS};
 use crate::tui::markdown;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -22,7 +22,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_messages(frame, app, chunks[1]);
     draw_input(frame, app, chunks[2]);
     draw_status(frame, app, chunks[3]);
-}
+
+    if app.model_selector.visible {
+        draw_model_selector(frame, app);
+    }
+
+    if app.command_palette.visible {
+        draw_command_palette(frame, app, chunks[2]);
+    }
+
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let mode_indicator = match app.mode {
@@ -139,8 +147,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(ref err) = app.error_message {
         all_lines.push(Line::from(""));
         all_lines.push(Line::from(Span::styled(
-            format!("  error: {}", err),
-            app.theme.error,
+            format!("  {}", err),
+            app.theme.dim,
         )));
     }
 
@@ -186,7 +194,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.input.is_empty() {
         vec![Line::from(vec![
             Span::styled("> ", app.theme.input_prompt),
-            Span::styled("type your message... (ctrl+enter to send)", app.theme.dim),
+            Span::styled("message or /model, /help", app.theme.dim),
         ])]
     } else {
         let mut lines = Vec::new();
@@ -214,7 +222,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block, area);
     frame.render_widget(paragraph, inner);
 
-    if app.mode == AppMode::Insert && !app.is_streaming {
+    if app.mode == AppMode::Insert && !app.is_streaming && !app.model_selector.visible {
         let (cx, cy) = cursor_position(&app.input, app.cursor_pos, inner);
         if cy < inner.y + inner.height {
             frame.set_cursor_position((cx, cy));
@@ -239,6 +247,58 @@ fn cursor_position(input: &str, byte_pos: usize, area: Rect) -> (u16, u16) {
     (area.x + col, area.y + row)
 }
 
+fn draw_model_selector(frame: &mut Frame, app: &App) {
+    let models = &app.model_selector.models;
+    let selected = app.model_selector.selected;
+
+    let width = models.iter().map(|m| m.len()).max().unwrap_or(20) as u16 + 6;
+    let height = models.len() as u16 + 4;
+
+    let area = frame.area();
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" model ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for (i, model) in models.iter().enumerate() {
+        let is_current = model == &app.model_name;
+        let marker = if is_current { "* " } else { "  " };
+
+        if i == selected {
+            lines.push(Line::from(Span::styled(
+                format!(" {}{} ", marker, model),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!(" {}{} ", marker, model),
+                Style::default().fg(Color::Reset),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " j/k ↑↓ select · enter confirm · esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let left = format!(
         " tokens: {}in · {}out",
@@ -246,8 +306,10 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         format_tokens(app.usage.output_tokens),
     );
 
-    let right = if app.mode == AppMode::Insert {
-        "ctrl+enter send · esc normal · ctrl+c quit "
+    let right = if app.model_selector.visible {
+        "j/k select · enter confirm · esc cancel "
+    } else if app.mode == AppMode::Insert {
+        "/model · esc normal · ctrl+c quit "
     } else {
         "i insert · j/k scroll · q quit "
     };

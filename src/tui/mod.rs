@@ -81,7 +81,7 @@ async fn run_app(
                 }
                 ui_event = events.next() => {
                     if let Some(ev) = ui_event {
-                        if handle_ui_event(&mut app, ev) {
+                        if handle_ui_event(&mut app, &agent, ev).await {
                             break;
                         }
                     } else {
@@ -107,6 +107,20 @@ async fn run_app(
                                 }
                             });
                         }
+                        InputAction::OpenModelSelector => {
+                            let agent_lock = agent.lock().await;
+                            let models = match agent_lock.fetch_models().await {
+                                Ok(m) => m,
+                                Err(_) => agent_lock.available_models(),
+                            };
+                            let current = agent_lock.current_model().to_string();
+                            drop(agent_lock);
+                            app.model_selector.open(models, &current);
+                        }
+                        InputAction::SelectModel(model) => {
+                            let mut agent_lock = agent.lock().await;
+                            agent_lock.set_model(model);
+                        }
                         InputAction::ScrollUp(n) => app.scroll_up(n),
                         InputAction::ScrollDown(n) => app.scroll_down(n),
                         InputAction::ScrollToTop => app.scroll_to_top(),
@@ -128,12 +142,26 @@ async fn run_app(
     Ok(())
 }
 
-fn handle_ui_event(app: &mut App, event: AppEvent) -> bool {
+async fn handle_ui_event(app: &mut App, agent: &Arc<Mutex<Agent>>, event: AppEvent) -> bool {
     match event {
         AppEvent::Key(key) => {
             let action = input::handle_key(app, key);
             match action {
                 InputAction::Quit => return true,
+                InputAction::OpenModelSelector => {
+                    let agent_lock = agent.lock().await;
+                    let models = match agent_lock.fetch_models().await {
+                        Ok(m) => m,
+                        Err(_) => agent_lock.available_models(),
+                    };
+                    let current = agent_lock.current_model().to_string();
+                    drop(agent_lock);
+                    app.model_selector.open(models, &current);
+                }
+                InputAction::SelectModel(model) => {
+                    let mut agent_lock = agent.lock().await;
+                    agent_lock.set_model(model);
+                }
                 InputAction::ScrollUp(n) => app.scroll_up(n),
                 InputAction::ScrollDown(n) => app.scroll_down(n),
                 InputAction::ScrollToTop => app.scroll_to_top(),

@@ -62,6 +62,23 @@ impl Agent {
         &self.messages
     }
 
+
+    pub fn set_model(&mut self, model: String) {
+        self.provider.set_model(model);
+    }
+
+    pub fn available_models(&self) -> Vec<String> {
+        self.provider.available_models()
+    }
+
+    pub async fn fetch_models(&self) -> anyhow::Result<Vec<String>> {
+        self.provider.fetch_models().await
+    }
+
+    pub fn current_model(&self) -> &str {
+        self.provider.model()
+    }
+
     pub async fn send_message(
         &mut self,
         content: &str,

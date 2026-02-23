@@ -24,6 +24,7 @@ pub struct AnthropicProvider {
     client: reqwest::Client,
     model: String,
     auth: tokio::sync::Mutex<AnthropicAuth>,
+    cached_models: tokio::sync::Mutex<Option<Vec<String>>>,
 }
 
 impl AnthropicProvider {
@@ -35,6 +36,7 @@ impl AnthropicProvider {
                 .expect("Failed to build reqwest client"),
             model: model.into(),
             auth: tokio::sync::Mutex::new(AnthropicAuth::ApiKey(api_key.into())),
+            cached_models: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -55,6 +57,7 @@ impl AnthropicProvider {
                 refresh_token: refresh_token.into(),
                 expires_at,
             }),
+            cached_models: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -413,6 +416,84 @@ impl Provider for AnthropicProvider {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+
+    fn set_model(&mut self, model: String) {
+        self.model = model;
+    }
+
+    fn available_models(&self) -> Vec<String> {
+        let cache = self.cached_models.blocking_lock();
+        cache.clone().unwrap_or_else(|| vec![
+            "claude-sonnet-4-20250514".to_string(),
+            "claude-opus-4-20250514".to_string(),
+            "claude-haiku-4-20250414".to_string(),
+        ])
+    }
+
+    fn fetch_models(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<String>>> + Send + '_>> {
+        Box::pin(async move {
+            {
+                let cache = self.cached_models.lock().await;
+                if let Some(ref models) = *cache {
+                    return Ok(models.clone());
+                }
+            }
+
+            let auth = self.resolve_auth().await?;
+
+            let mut req = self
+                .client
+                .get("https://api.anthropic.com/v1/models")
+                .header(&auth.header_name, &auth.header_value)
+                .header("anthropic-version", "2023-06-01");
+
+            if auth.is_oauth {
+                req = req
+                    .header(
+                        "anthropic-beta",
+                        "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+                    )
+                    .header("user-agent", "claude-code/2.1.49 (external, cli)");
+            }
+
+            let resp = req.send().await.context("Failed to fetch Anthropic models")?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                warn!("Anthropic models API error {status}: {body}");
+                return Ok(self.available_models());
+            }
+
+            let data: serde_json::Value = resp
+                .json()
+                .await
+                .context("Failed to parse Anthropic models response")?;
+
+            let mut models: Vec<String> = data["data"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m["id"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if models.is_empty() {
+                return Ok(self.available_models());
+            }
+
+            models.sort();
+
+            let mut cache = self.cached_models.lock().await;
+            *cache = Some(models.clone());
+
+            Ok(models)
+        })
     }
 
     fn stream(

@@ -78,7 +78,11 @@ pub struct Usage {
 pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
     fn model(&self) -> &str;
-
+    fn set_model(&mut self, model: String);
+    fn available_models(&self) -> Vec<String>;
+    fn fetch_models(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<String>>> + Send + '_>>;
     fn stream(
         &self,
         messages: &[Message],

@@ -26,6 +26,7 @@ use crate::provider::{
 pub struct OpenAIProvider {
     client: Client<OpenAIConfig>,
     model: String,
+    cached_models: tokio::sync::Mutex<Option<Vec<String>>>,
 }
 
 impl OpenAIProvider {
@@ -33,13 +34,14 @@ impl OpenAIProvider {
         Self {
             client: Client::new(),
             model: model.into(),
+            cached_models: tokio::sync::Mutex::new(None),
         }
     }
-
     pub fn new_with_config(config: OpenAIConfig, model: impl Into<String>) -> Self {
         Self {
             client: Client::with_config(config),
             model: model.into(),
+            cached_models: tokio::sync::Mutex::new(None),
         }
     }
 }
@@ -209,6 +211,66 @@ impl Provider for OpenAIProvider {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+
+    fn set_model(&mut self, model: String) {
+        self.model = model;
+    }
+
+    fn available_models(&self) -> Vec<String> {
+        let cache = self.cached_models.blocking_lock();
+        cache.clone().unwrap_or_else(|| vec![
+            "gpt-4o".to_string(),
+            "gpt-4o-mini".to_string(),
+            "gpt-4-turbo".to_string(),
+            "o1".to_string(),
+            "o1-mini".to_string(),
+            "o3-mini".to_string(),
+        ])
+    }
+
+    fn fetch_models(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<String>>> + Send + '_>> {
+        let client = self.client.clone();
+        Box::pin(async move {
+            {
+                let cache = self.cached_models.lock().await;
+                if let Some(ref models) = *cache {
+                    return Ok(models.clone());
+                }
+            }
+
+            let resp = client.models().list().await;
+
+            match resp {
+                Ok(list) => {
+                    let mut models: Vec<String> = list
+                        .data
+                        .into_iter()
+                        .map(|m| m.id)
+                        .filter(|id| {
+                            id.starts_with("gpt-") || id.starts_with("o1") || id.starts_with("o3") || id.starts_with("o4")
+                        })
+                        .collect();
+                    models.sort();
+                    models.dedup();
+
+                    if models.is_empty() {
+                        return Ok(self.available_models());
+                    }
+
+                    let mut cache = self.cached_models.lock().await;
+                    *cache = Some(models.clone());
+                    Ok(models)
+                }
+                Err(e) => {
+                    warn!("Failed to fetch OpenAI models: {e}");
+                    Ok(self.available_models())
+                }
+            }
+        })
     }
 
     fn stream(
