@@ -17,6 +17,7 @@
 html, body {
   height: 100vh;
   height: 100dvh;
+  height: -webkit-fill-available;
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);
@@ -263,16 +264,17 @@ html, body {
 .anim-wrap {
   position: fixed;
   z-index: 1;
-  top: 50%;
-  left: 50%;
-  width: 1440px;
-  height: 900px;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  overflow: hidden;
 }
 
 .anim-wrap [data-us-project] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   width: 1440px !important;
   height: 900px !important;
+  transform: translate(-50%, -50%);
 }
 
 /* ── Mobile ── */
@@ -294,4 +296,9 @@ html, body {
     font-size: 12px;
   }
 
+  .anim-wrap [data-us-project] {
+    /* Scale so 900px canvas covers full physical screen (~956pts on tallest iPhones) */
+    /* Also covers behind iOS 26 liquid glass chrome + home indicator */
+    transform: translate(-50%, -50%) scale(1.2);
+  }
 }
