@@ -7,6 +7,7 @@ use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 
+use crate::agent::TodoStatus;
 use crate::tui::app::{App, AppMode, ChatMessage};
 use crate::tui::markdown;
 use crate::tui::theme::Theme;
@@ -61,6 +62,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if app.help_popup.visible {
         ui_popups::draw_help_popup(frame, app);
+    }
+
+    if app.context_menu.visible {
+        ui_popups::draw_context_menu(frame, app);
     }
 }
 
@@ -188,8 +193,10 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let mut all_lines: Vec<Line<'static>> = Vec::new();
+    let mut line_to_msg: Vec<usize> = Vec::new();
 
-    for msg in &app.messages {
+    for (msg_idx, msg) in app.messages.iter().enumerate() {
+        let before = all_lines.len();
         render_message(
             msg,
             &app.theme,
@@ -197,6 +204,40 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             inner.width,
             &mut all_lines,
         );
+        let after = all_lines.len();
+        for _ in before..after {
+            line_to_msg.push(msg_idx);
+        }
+    }
+
+    if !app.todos.is_empty() {
+        let pad = if inner.width < 55 { "  " } else { "    " };
+        all_lines.push(Line::from(""));
+        line_to_msg.push(app.messages.len().saturating_sub(1));
+        let done = app
+            .todos
+            .iter()
+            .filter(|t| t.status == TodoStatus::Completed)
+            .count();
+        let total = app.todos.len();
+        all_lines.push(Line::from(vec![
+            Span::styled(format!("{}  ", pad), app.theme.dim),
+            Span::styled(format!("{}/{} ", done, total), app.theme.dim),
+            Span::styled("tasks", app.theme.dim),
+        ]));
+        line_to_msg.push(app.messages.len().saturating_sub(1));
+        for todo in &app.todos {
+            let (icon, style) = match todo.status {
+                TodoStatus::Completed => ("\u{25c6}", app.theme.tool_success),
+                TodoStatus::InProgress => ("\u{25c8}", Style::default().fg(app.theme.accent)),
+                TodoStatus::Pending => ("\u{25c7}", app.theme.dim),
+            };
+            all_lines.push(Line::from(vec![
+                Span::styled(format!("{}  {} ", pad, icon), style),
+                Span::styled(todo.content.clone(), style),
+            ]));
+            line_to_msg.push(app.messages.len().saturating_sub(1));
+        }
     }
 
     if app.is_streaming {
@@ -242,6 +283,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     app.content_width = area.width;
     app.visual_lines = compute_visual_lines(&all_lines, area.width);
+    app.message_line_map = expand_line_to_msg(&all_lines, &line_to_msg, area.width);
 
     let block = Block::default()
         .borders(Borders::TOP)
@@ -625,7 +667,19 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             "\u{2191}\u{2193} enter esc "
         }
     } else if app.is_streaming {
-        "^C "
+        let esc_active = app
+            .esc_hint_until
+            .map(|t| std::time::Instant::now() < t)
+            .unwrap_or(false);
+        if esc_active {
+            if compact {
+                "esc to cancel "
+            } else {
+                "press esc again to cancel "
+            }
+        } else {
+            "esc \u{00b7} ^C "
+        }
     } else if app.vim_mode && app.mode == AppMode::Normal {
         "i j/k q "
     } else if compact {
@@ -761,4 +815,25 @@ fn blend_color(fg: Color, bg: Color, t: f32) -> Color {
         (fg_g as f32 * inv + bg_g as f32 * t) as u8,
         (fb as f32 * inv + bb as f32 * t) as u8,
     )
+}
+
+fn expand_line_to_msg(lines: &[Line], line_to_msg: &[usize], width: u16) -> Vec<usize> {
+    let mut result = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let msg_idx = line_to_msg.get(i).copied().unwrap_or(0);
+        if width == 0 {
+            result.push(msg_idx);
+        } else {
+            let chars: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+            let wrapped = if chars == 0 {
+                1
+            } else {
+                (chars as u32).div_ceil(width as u32).max(1)
+            };
+            for _ in 0..wrapped {
+                result.push(msg_idx);
+            }
+        }
+    }
+    result
 }

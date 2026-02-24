@@ -352,6 +352,12 @@ impl ThinkingLevel {
             _ => ThinkingLevel::High,
         }
     }
+
+    pub fn next(self) -> Self {
+        let all = Self::all();
+        let idx = all.iter().position(|l| *l == self).unwrap_or(0);
+        all[(idx + 1) % all.len()]
+    }
 }
 
 pub struct ThinkingSelector {
@@ -540,4 +546,67 @@ pub fn time_ago(iso: &str) -> String {
         return format!("{}w ago", secs / 604800);
     }
     iso.to_string()
+}
+
+pub struct MessageContextMenu {
+    pub visible: bool,
+    pub message_index: usize,
+    pub selected: usize,
+    pub screen_x: u16,
+    pub screen_y: u16,
+}
+
+impl Default for MessageContextMenu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MessageContextMenu {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            message_index: 0,
+            selected: 0,
+            screen_x: 0,
+            screen_y: 0,
+        }
+    }
+
+    pub fn open(&mut self, message_index: usize, x: u16, y: u16) {
+        self.visible = true;
+        self.message_index = message_index;
+        self.selected = 0;
+        self.screen_x = x;
+        self.screen_y = y;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn down(&mut self) {
+        if self.selected < 1 {
+            self.selected += 1;
+        }
+    }
+
+    pub fn confirm(&mut self) -> Option<(usize, usize)> {
+        if self.visible {
+            self.visible = false;
+            Some((self.selected, self.message_index))
+        } else {
+            None
+        }
+    }
+
+    pub fn labels() -> &'static [&'static str] {
+        &["continue from here", "fork from here"]
+    }
 }

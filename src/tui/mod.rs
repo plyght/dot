@@ -242,9 +242,24 @@ async fn dispatch_action(
             *agent_rx = None;
             app.is_streaming = false;
             app.streaming_started = None;
-            app.current_response.clear();
-            app.current_thinking.clear();
-            app.current_tool_calls.clear();
+            if !app.current_response.is_empty() || !app.current_tool_calls.is_empty() {
+                let thinking = if app.current_thinking.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(&mut app.current_thinking))
+                };
+                app.messages.push(app::ChatMessage {
+                    role: "assistant".to_string(),
+                    content: std::mem::take(&mut app.current_response),
+                    tool_calls: std::mem::take(&mut app.current_tool_calls),
+                    thinking,
+                    model: Some(app.model_name.clone()),
+                });
+            } else {
+                app.current_response.clear();
+                app.current_thinking.clear();
+                app.current_tool_calls.clear();
+            }
             app.pending_tool_name = None;
             app.error_message = Some("cancelled".to_string());
             return LoopSignal::CancelStream;
@@ -411,6 +426,49 @@ async fn dispatch_action(
         InputAction::SetThinkingLevel(budget) => {
             let mut agent_lock = agent.lock().await;
             agent_lock.set_thinking_budget(budget);
+        }
+        InputAction::CycleThinkingLevel => {
+            let next = app.thinking_level().next();
+            let budget = next.budget_tokens();
+            app.thinking_budget = budget;
+            let mut agent_lock = agent.lock().await;
+            agent_lock.set_thinking_budget(budget);
+        }
+        InputAction::TruncateToMessage(idx) => {
+            app.messages.truncate(idx + 1);
+            app.current_response.clear();
+            app.current_thinking.clear();
+            app.current_tool_calls.clear();
+            app.scroll_to_bottom();
+            let mut agent_lock = agent.lock().await;
+            agent_lock.truncate_messages(idx + 1);
+        }
+        InputAction::ForkFromMessage(idx) => {
+            let fork_messages: Vec<(String, String, Option<String>)> = app.messages[..=idx]
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone(), m.model.clone()))
+                .collect();
+            let mut agent_lock = agent.lock().await;
+            match agent_lock.fork_conversation(idx + 1) {
+                Ok(()) => {
+                    drop(agent_lock);
+                    app.clear_conversation();
+                    for (role, content, model) in fork_messages {
+                        app.messages.push(app::ChatMessage {
+                            role,
+                            content,
+                            tool_calls: Vec::new(),
+                            thinking: None,
+                            model,
+                        });
+                    }
+                    app.scroll_to_bottom();
+                }
+                Err(e) => {
+                    drop(agent_lock);
+                    app.error_message = Some(format!("fork failed: {e}"));
+                }
+            }
         }
         InputAction::None => {}
     }

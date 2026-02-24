@@ -162,7 +162,17 @@ pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'stati
         render_code_block(&code_lang, &code_lines, theme, &mut lines);
     }
 
-    lines
+    let mut deduped: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+    let mut prev_empty = false;
+    for line in lines {
+        let is_empty = line.spans.iter().all(|s| s.content.is_empty());
+        if is_empty && prev_empty {
+            continue;
+        }
+        prev_empty = is_empty;
+        deduped.push(line);
+    }
+    deduped
 }
 
 fn render_code_block(

@@ -25,6 +25,9 @@ pub enum InputAction {
     ResumeSession { id: String },
     SetThinkingLevel(u32),
     ToggleThinking,
+    CycleThinkingLevel,
+    TruncateToMessage(usize),
+    ForkFromMessage(usize),
 }
 
 pub fn handle_paste(app: &mut App, text: String) -> InputAction {
@@ -98,14 +101,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
 
     if key.code == KeyCode::Esc && app.is_streaming {
         let now = Instant::now();
-        let is_double = app
-            .last_escape_time
-            .map(|t| t.elapsed() < Duration::from_millis(500))
-            .unwrap_or(false);
-        app.last_escape_time = if is_double { None } else { Some(now) };
-        if is_double {
-            return InputAction::CancelStream;
+        if let Some(hint_until) = app.esc_hint_until {
+            if now < hint_until {
+                app.esc_hint_until = None;
+                app.last_escape_time = None;
+                return InputAction::CancelStream;
+            }
         }
+        app.esc_hint_until = Some(now + Duration::from_secs(3));
+        app.last_escape_time = Some(now);
+        return InputAction::None;
     }
 
     if app.model_selector.visible {
@@ -129,6 +134,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             app.help_popup.close();
         }
         return InputAction::None;
+    }
+
+    if app.context_menu.visible {
+        return handle_context_menu(app, key);
     }
 
     if app.command_palette.visible {
@@ -336,6 +345,35 @@ fn execute_command(app: &mut App, cmd_name: &str) -> InputAction {
     }
 }
 
+fn handle_context_menu(app: &mut App, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.context_menu.close();
+            InputAction::None
+        }
+        KeyCode::Up => {
+            app.context_menu.up();
+            InputAction::None
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            app.context_menu.down();
+            InputAction::None
+        }
+        KeyCode::Enter => {
+            if let Some((action, msg_idx)) = app.context_menu.confirm() {
+                match action {
+                    0 => InputAction::TruncateToMessage(msg_idx),
+                    1 => InputAction::ForkFromMessage(msg_idx),
+                    _ => InputAction::None,
+                }
+            } else {
+                InputAction::None
+            }
+        }
+        _ => InputAction::None,
+    }
+}
+
 fn handle_normal(app: &mut App, key: KeyEvent) -> InputAction {
     match key.code {
         KeyCode::Char('q') => InputAction::Quit,
@@ -367,7 +405,7 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputAction {
 fn handle_insert(app: &mut App, key: KeyEvent) -> InputAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('t') => return InputAction::OpenThinkingSelector,
+            KeyCode::Char('t') => return InputAction::CycleThinkingLevel,
             KeyCode::Char('a') => {
                 app.move_cursor_home();
                 return InputAction::None;
@@ -430,7 +468,7 @@ fn handle_insert(app: &mut App, key: KeyEvent) -> InputAction {
 fn handle_simple(app: &mut App, key: KeyEvent) -> InputAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('t') => return InputAction::OpenThinkingSelector,
+            KeyCode::Char('t') => return InputAction::CycleThinkingLevel,
             KeyCode::Char('a') => {
                 app.move_cursor_home();
                 return InputAction::None;
@@ -572,6 +610,24 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                 app.selection.clear();
             }
 
+            if app.context_menu.visible {
+                if let Some(popup) = app.layout.context_menu {
+                    if rect_contains(popup, col, row) {
+                        let relative_row = row.saturating_sub(popup.y + 1) as usize;
+                        app.context_menu.selected = relative_row.min(1);
+                        if let Some((action, msg_idx)) = app.context_menu.confirm() {
+                            return match action {
+                                0 => InputAction::TruncateToMessage(msg_idx),
+                                1 => InputAction::ForkFromMessage(msg_idx),
+                                _ => InputAction::None,
+                            };
+                        }
+                    }
+                }
+                app.context_menu.close();
+                return InputAction::None;
+            }
+
             if app.model_selector.visible
                 && let Some(popup) = app.layout.model_selector
             {
@@ -711,6 +767,22 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                     }
                 } else {
                     app.selection.clear();
+                }
+            }
+            InputAction::None
+        }
+        MouseEventKind::Down(MouseButton::Right) => {
+            if app.context_menu.visible {
+                app.context_menu.close();
+                return InputAction::None;
+            }
+            if rect_contains(app.layout.messages, col, row) && !app.is_streaming {
+                let content_y = app.layout.messages.y + 1;
+                if row >= content_y {
+                    let visual_row = (app.scroll_offset + (row - content_y)) as usize;
+                    if let Some(&msg_idx) = app.message_line_map.get(visual_row) {
+                        app.context_menu.open(msg_idx, col, row);
+                    }
                 }
             }
             InputAction::None

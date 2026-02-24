@@ -58,6 +58,19 @@ impl ToolCategory {
             Self::Unknown => "tool".to_string(),
         }
     }
+
+    pub fn intent(&self) -> &'static str {
+        match self {
+            Self::FileRead => "reading",
+            Self::FileWrite => "writing",
+            Self::Directory => "listing",
+            Self::Search => "searching",
+            Self::Command => "running",
+            Self::Mcp { .. } => "calling",
+            Self::Skill => "loading",
+            Self::Unknown => "running",
+        }
+    }
 }
 
 pub struct ToolCallDisplay {

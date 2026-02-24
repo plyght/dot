@@ -1,3 +1,16 @@
+#[derive(Debug, Clone, PartialEq)]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone)]
+pub struct TodoItem {
+    pub content: String,
+    pub status: TodoStatus,
+}
+
 use crate::provider::Usage;
 #[derive(Debug)]
 pub enum AgentEvent {
@@ -29,6 +42,7 @@ pub enum AgentEvent {
         messages_removed: usize,
     },
     TitleGenerated(String),
+    TodoUpdate(Vec<TodoItem>),
 }
 
 pub(super) struct PendingToolCall {

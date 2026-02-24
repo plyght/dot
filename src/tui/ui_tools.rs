@@ -35,18 +35,12 @@ fn render_tool_calls_inner(
     let out_pad = if compact { "      " } else { "          " };
 
     for tc in tool_calls {
-        let (status_icon, status_style) = if tc.is_error {
-            ("\u{2717}", theme.error)
-        } else {
-            ("\u{2713}", theme.tool_success)
-        };
-
         let cat_style = tool_category_style(&tc.category, theme);
         let label = tc.category.label();
-
+        let err_style = if tc.is_error { theme.error } else { cat_style };
         let mut header_spans = vec![
-            Span::styled(format!("{}{} ", hdr_pad, status_icon), status_style),
-            Span::styled(format!("{:<6}", label), cat_style),
+            Span::styled(format!("{}  ", hdr_pad), err_style),
+            Span::styled(format!("{:<6}", label), err_style),
         ];
 
         if !tc.detail.is_empty() {
@@ -203,15 +197,13 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
         let category = ToolCategory::from_name(tool_name);
         let detail = extract_tool_detail(tool_name, &app.pending_tool_input);
 
+        let cat_style = tool_category_style(&category, &app.theme);
         let dots = ["\u{00b7}", "\u{2022}", "\u{25cf}", "\u{2022}"];
         let idx = (app.tick_count / 10 % dots.len() as u64) as usize;
-
-        let cat_style = tool_category_style(&category, &app.theme);
-        let label = category.label();
-
+        let intent = category.intent();
         let mut tool_spans = vec![
             Span::styled(format!("{}{} ", pad, dots[idx]), cat_style),
-            Span::styled(format!("{:<6}", label), cat_style),
+            Span::styled(format!("{} ", intent), cat_style),
         ];
 
         if !detail.is_empty() {

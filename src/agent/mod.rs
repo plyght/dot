@@ -1,7 +1,7 @@
 mod events;
 mod profile;
 
-pub use events::AgentEvent;
+pub use events::{AgentEvent, TodoItem, TodoStatus};
 pub use profile::AgentProfile;
 
 use events::PendingToolCall;
@@ -224,6 +224,46 @@ impl Agent {
         &self.cwd
     }
 
+    pub fn truncate_messages(&mut self, count: usize) {
+        let target = count.min(self.messages.len());
+        self.messages.truncate(target);
+    }
+
+    pub fn fork_conversation(&mut self, msg_count: usize) -> Result<()> {
+        let kept = self.messages[..msg_count.min(self.messages.len())].to_vec();
+        self.cleanup_if_empty();
+        let conversation_id = self.db.create_conversation(
+            self.provider().model(),
+            self.provider().name(),
+            &self.cwd,
+        )?;
+        self.conversation_id = conversation_id;
+        self.messages = kept;
+        for msg in &self.messages {
+            let role = match msg.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+                Role::System => "system",
+            };
+            let text: String = msg
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::Text(t) = b {
+                        Some(t.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.is_empty() {
+                let _ = self.db.add_message(&self.conversation_id, role, &text);
+            }
+        }
+        Ok(())
+    }
+
     fn title_model(&self) -> &str {
         match self.provider().name() {
             "anthropic" => "claude-3-5-haiku-20241022",
@@ -369,7 +409,28 @@ impl Agent {
         let tool_filter = self.profile().tool_filter.clone();
         let thinking_budget = self.thinking_budget;
         loop {
-            let tool_defs = self.tools.definitions_filtered(&tool_filter);
+            let mut tool_defs = self.tools.definitions_filtered(&tool_filter);
+            tool_defs.push(crate::provider::ToolDefinition {
+                name: "todo_write".to_string(),
+                description: "Create or update the task list for the current session. Use to track progress on multi-step tasks.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "todos": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "content": { "type": "string", "description": "Brief description of the task" },
+                                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Current status" }
+                                },
+                                "required": ["content", "status"]
+                            }
+                        }
+                    },
+                    "required": ["todos"]
+                }),
+            });
             let mut stream_rx = self
                 .provider()
                 .stream(
@@ -487,6 +548,39 @@ impl Agent {
             for tc in &tool_calls {
                 let input_value: serde_json::Value =
                     serde_json::from_str(&tc.input).unwrap_or(serde_json::Value::Null);
+                if tc.name == "todo_write" {
+                    if let Some(todos_arr) = input_value.get("todos").and_then(|v| v.as_array()) {
+                        let items: Vec<TodoItem> = todos_arr
+                            .iter()
+                            .filter_map(|t| {
+                                let content = t.get("content")?.as_str()?.to_string();
+                                let status = match t
+                                    .get("status")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("pending")
+                                {
+                                    "in_progress" => TodoStatus::InProgress,
+                                    "completed" => TodoStatus::Completed,
+                                    _ => TodoStatus::Pending,
+                                };
+                                Some(TodoItem { content, status })
+                            })
+                            .collect();
+                        let _ = event_tx.send(AgentEvent::TodoUpdate(items));
+                    }
+                    let _ = event_tx.send(AgentEvent::ToolCallResult {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        output: "ok".to_string(),
+                        is_error: false,
+                    });
+                    result_blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content: "ok".to_string(),
+                        is_error: false,
+                    });
+                    continue;
+                }
                 let _ = event_tx.send(AgentEvent::ToolCallExecuting {
                     id: tc.id.clone(),
                     name: tc.name.clone(),
@@ -499,7 +593,6 @@ impl Agent {
                     tokio::task::block_in_place(|| self.tools.execute(&tool_name, tool_input))
                 })
                 .await;
-
                 let (output, is_error) = match exec_result {
                     Err(_elapsed) => (
                         format!("Tool '{}' timed out after 30 seconds.", tc.name),
@@ -514,7 +607,6 @@ impl Agent {
                     is_error,
                     &output[..output.len().min(200)]
                 );
-
                 let _ = self.db.update_tool_result(&tc.id, &output, is_error);
                 let _ = event_tx.send(AgentEvent::ToolCallResult {
                     id: tc.id.clone(),

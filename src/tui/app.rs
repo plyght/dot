@@ -3,12 +3,12 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
-use crate::agent::AgentEvent;
+use crate::agent::{AgentEvent, TodoItem};
 use crate::tui::theme::Theme;
 use crate::tui::tools::{ToolCallDisplay, ToolCategory, extract_tool_detail};
 use crate::tui::widgets::{
-    AgentSelector, CommandPalette, HelpPopup, ModelSelector, SessionSelector, ThinkingLevel,
-    ThinkingSelector,
+    AgentSelector, CommandPalette, HelpPopup, MessageContextMenu, ModelSelector, SessionSelector,
+    ThinkingLevel, ThinkingSelector,
 };
 
 pub struct ChatMessage {
@@ -134,6 +134,7 @@ pub struct LayoutRects {
     pub thinking_selector: Option<Rect>,
     pub session_selector: Option<Rect>,
     pub help_popup: Option<Rect>,
+    pub context_menu: Option<Rect>,
 }
 
 pub struct App {
@@ -185,6 +186,11 @@ pub struct App {
 
     pub context_window: u32,
     pub last_input_tokens: u32,
+
+    pub esc_hint_until: Option<Instant>,
+    pub todos: Vec<TodoItem>,
+    pub message_line_map: Vec<usize>,
+    pub context_menu: MessageContextMenu,
 }
 
 impl App {
@@ -240,6 +246,10 @@ impl App {
             content_width: 0,
             context_window,
             last_input_tokens: 0,
+            esc_hint_until: None,
+            todos: Vec::new(),
+            message_line_map: Vec::new(),
+            context_menu: MessageContextMenu::new(),
         }
     }
 
@@ -346,6 +356,9 @@ impl App {
                         messages_removed
                     );
                 }
+            }
+            AgentEvent::TodoUpdate(items) => {
+                self.todos = items;
             }
         }
     }
@@ -575,6 +588,10 @@ impl App {
         self.conversation_title = None;
         self.selection.clear();
         self.visual_lines.clear();
+        self.todos.clear();
+        self.message_line_map.clear();
+        self.esc_hint_until = None;
+        self.context_menu.close();
     }
 
     pub fn insert_char(&mut self, c: char) {

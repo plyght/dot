@@ -615,3 +615,52 @@ pub fn draw_session_selector(frame: &mut Frame, app: &mut App) {
 
     frame.render_widget(Paragraph::new(all_lines), inner);
 }
+
+pub fn draw_context_menu(frame: &mut Frame, app: &mut App) {
+    let menu = &app.context_menu;
+    if !menu.visible {
+        return;
+    }
+
+    let labels = crate::tui::widgets::MessageContextMenu::labels();
+    let content_width = labels.iter().map(|l| l.len()).max().unwrap_or(10) + 6;
+    let content_height = labels.len() as u16 + 2;
+    let box_width = (content_width as u16).min(frame.area().width.saturating_sub(2));
+    let box_height = content_height;
+
+    let x = menu
+        .screen_x
+        .min(frame.area().width.saturating_sub(box_width));
+    let y = menu
+        .screen_y
+        .min(frame.area().height.saturating_sub(box_height));
+    let popup = Rect::new(x, y, box_width, box_height);
+    app.layout.context_menu = Some(popup);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.muted_fg));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (i, label) in labels.iter().enumerate() {
+        let is_sel = i == menu.selected;
+        let style = if is_sel {
+            Style::default()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Reset)
+        };
+        let prefix = if is_sel { " \u{25b8} " } else { "   " };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, label),
+            style,
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
