@@ -47,6 +47,14 @@ fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
     result
 }
 
+fn truncate_code_line(line: &str, max_chars: usize) -> String {
+    if line.chars().count() <= max_chars {
+        return line.to_string();
+    }
+    let truncated: String = line.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}…", truncated)
+}
+
 pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
@@ -209,7 +217,8 @@ fn render_code_block(
 
     let is_diff = lang == "diff" || lang == "patch";
     if is_diff {
-        for line in code_lines {
+        for raw_line in code_lines {
+            let line = &truncate_code_line(raw_line, w.saturating_sub(pad_len));
             let diff_style = if line.starts_with('+') {
                 theme.diff_add.bg(bg)
             } else if line.starts_with('-') {
@@ -238,7 +247,8 @@ fn render_code_block(
         && let Some(st_theme) = THEME_SET.themes.get(syntect_theme_name)
     {
         let mut highlighter = syntect::easy::HighlightLines::new(syntax, st_theme);
-        for line in code_lines {
+        for raw_line in code_lines {
+            let line: &str = &truncate_code_line(raw_line, w.saturating_sub(pad_len));
             let highlighted = highlighter.highlight_line(line, &SYNTAX_SET);
             match highlighted {
                 Ok(ranges) => {
@@ -275,7 +285,8 @@ fn render_code_block(
         }
     } else {
         let code_style = Style::default().fg(theme.fg).bg(bg);
-        for line in code_lines {
+        for raw_line in code_lines {
+            let line = &truncate_code_line(raw_line, w.saturating_sub(pad_len));
             let content = format!("{}{}", pad, line);
             let content_len = content.chars().count();
             output.push(Line::from(vec![

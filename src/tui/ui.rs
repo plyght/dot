@@ -19,7 +19,7 @@ fn is_compact(w: u16) -> bool {
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let input_height = app.input_height();
+    let input_height = app.input_height(frame.area().width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -268,18 +268,18 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let total_visual: u32 = all_lines
         .iter()
         .map(|l| {
-            if inner.width == 0 {
+            if area.width == 0 {
                 return 1u32;
             }
             let chars: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
             if chars == 0 {
                 1
             } else {
-                (chars as u32).div_ceil(inner.width as u32).max(1)
+                (chars as u32).div_ceil(area.width as u32).max(1)
             }
         })
         .sum();
-    let visible = inner.height as u32;
+    let visible = area.height.saturating_sub(1) as u32;
     app.max_scroll = total_visual.saturating_sub(visible).min(u16::MAX as u32) as u16;
     if app.follow_bottom {
         app.scroll_position = app.max_scroll as f64;
@@ -416,15 +416,8 @@ fn render_message(
             if let Some(ref thinking) = msg.thinking {
                 render_thinking_block(thinking, thinking_expanded, theme, compact, lines);
             }
-            if !msg.tool_calls.is_empty() {
-                if msg.content.is_empty() {
-                    ui_tools::render_tool_calls(&msg.tool_calls, theme, compact, lines);
-                } else {
-                    ui_tools::render_tool_calls_compact(&msg.tool_calls, theme, compact, lines);
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
-                }
+            if !msg.tool_calls.is_empty() && msg.content.is_empty() {
+                ui_tools::render_tool_calls(&msg.tool_calls, theme, compact, lines);
             }
             let md_lines = markdown::render_markdown(
                 &msg.content,
@@ -449,6 +442,9 @@ fn render_message(
                     }
                 }
                 lines.push(Line::from(padded));
+            }
+            if !msg.tool_calls.is_empty() && !msg.content.is_empty() {
+                ui_tools::render_tool_calls_compact(&msg.tool_calls, theme, compact, lines);
             }
         }
     }
@@ -640,19 +636,26 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
 fn cursor_position(input: &str, byte_pos: usize, area: Rect) -> (u16, u16) {
     let before = &input[..byte_pos.min(input.len())];
-    let mut row: u16 = 0;
-    let mut col: u16 = 2;
-
-    for ch in before.chars() {
-        if ch == '\n' {
-            row += 1;
-            col = 2;
-        } else {
-            col += 1;
-        }
+    let width = area.width as usize;
+    if width == 0 {
+        return (area.x, area.y);
     }
-
-    (area.x + col, area.y + row)
+    let prefix_w: usize = 2;
+    let mut visual_row: usize = 0;
+    let mut segments = before.split('\n').peekable();
+    while let Some(seg) = segments.next() {
+        let char_count = seg.chars().count();
+        let total = prefix_w + char_count;
+        if segments.peek().is_none() {
+            let extra_rows = total / width;
+            let col = total % width;
+            visual_row += extra_rows;
+            return (area.x + col as u16, area.y + visual_row as u16);
+        }
+        let rows = if total == 0 { 1 } else { total.div_ceil(width) };
+        visual_row += rows;
+    }
+    (area.x + prefix_w as u16, area.y + visual_row as u16)
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {

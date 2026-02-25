@@ -529,16 +529,34 @@ impl App {
         true
     }
 
-    pub fn input_height(&self) -> u16 {
+    pub fn input_height(&self, width: u16) -> u16 {
         if self.is_streaming && self.input.is_empty() && self.attachments.is_empty() {
             return 3;
         }
-        let lines = if self.input.is_empty() {
-            1
+        let w = width as usize;
+        if w < 4 {
+            return 3;
+        }
+        let has_input = !self.input.is_empty() || !self.attachments.is_empty();
+        if !has_input {
+            return 3;
+        }
+        let mut visual = 0usize;
+        if !self.attachments.is_empty() {
+            visual += 1;
+        }
+        let display = self.display_input();
+        if display.is_empty() {
+            if self.attachments.is_empty() {
+                visual += 1;
+            }
         } else {
-            self.input.lines().count() + if self.input.ends_with('\n') { 1 } else { 0 }
-        };
-        (lines as u16 + 1).clamp(3, 12)
+            for line in display.split('\n') {
+                let total = 2 + line.chars().count();
+                visual += if total == 0 { 1 } else { total.div_ceil(w).max(1) };
+            }
+        }
+        (visual as u16 + 1).clamp(3, 12)
     }
 
     pub fn handle_paste(&mut self, text: String) {

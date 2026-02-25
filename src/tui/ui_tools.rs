@@ -103,16 +103,9 @@ fn render_tool_calls_inner(
         let should_show = if tc.is_error {
             true
         } else if !show_verbose_output {
-            false
+            matches!(tc.category, ToolCategory::FileWrite | ToolCategory::Patch)
         } else {
-            match &tc.category {
-                ToolCategory::FileRead => false,
-                ToolCategory::FileWrite => false,
-                ToolCategory::Directory => true,
-                ToolCategory::Search => true,
-                ToolCategory::Command => true,
-                _ => true,
-            }
+            !matches!(tc.category, ToolCategory::FileRead)
         };
 
         if let Some(ref output) = tc.output

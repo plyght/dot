@@ -300,7 +300,22 @@ fn handle_command_palette(app: &mut App, key: KeyEvent) -> InputAction {
             app.command_palette.up();
             InputAction::None
         }
-        KeyCode::Down | KeyCode::Tab => {
+        KeyCode::Tab => {
+            if let Some(&idx) = app.command_palette.filtered.get(app.command_palette.selected) {
+                let entry = app.command_palette.entries[idx].clone();
+                if entry.kind == PaletteEntryKind::Command {
+                    app.input.clear();
+                    app.cursor_pos = 0;
+                    app.command_palette.close();
+                    return execute_palette_entry(app, entry);
+                }
+                app.input = format!("/{}", entry.name);
+                app.cursor_pos = app.input.len();
+                app.command_palette.update_filter(&app.input);
+            }
+            InputAction::None
+        }
+        KeyCode::Down => {
             app.command_palette.down();
             InputAction::None
         }
