@@ -20,6 +20,7 @@ pub enum InputAction {
     NewConversation,
     OpenModelSelector,
     OpenAgentSelector,
+    ToggleAgent,
     OpenThinkingSelector,
     OpenSessionSelector,
     SelectModel { provider: String, model: String },
@@ -32,6 +33,10 @@ pub enum InputAction {
     ForkFromMessage(usize),
     LoadSkill { name: String },
     RunCustomCommand { name: String, args: String },
+    OpenRenamePopup,
+    RenameSession(String),
+    ExportSession(Option<String>),
+    OpenExternalEditor,
 }
 
 pub fn handle_paste(app: &mut App, text: String) -> InputAction {
@@ -137,6 +142,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
         return InputAction::None;
     }
 
+    if app.rename_visible {
+        return handle_rename_popup(app, key);
+    }
+
     if app.pending_question.is_some() {
         return handle_question_popup(app, key);
     }
@@ -151,6 +160,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
 
     if app.command_palette.visible {
         return handle_command_palette(app, key);
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.code == KeyCode::Char('e')
+        && (!app.vim_mode || app.mode == AppMode::Insert)
+    {
+        return InputAction::OpenExternalEditor;
     }
 
     if app.vim_mode {
@@ -192,6 +208,11 @@ fn handle_model_selector(app: &mut App, key: KeyEvent) -> InputAction {
         KeyCode::Backspace => {
             app.model_selector.query.pop();
             app.model_selector.apply_filter();
+            InputAction::None
+        }
+        KeyCode::Char('*') | KeyCode::Char('s') => {
+            app.model_selector.toggle_favorite();
+            app.favorite_models = app.model_selector.favorites.clone();
             InputAction::None
         }
         KeyCode::Char(c) => {
@@ -449,8 +470,11 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputAction {
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             InputAction::ClearConversation
         }
-        KeyCode::Tab => InputAction::OpenAgentSelector,
+        KeyCode::Tab => InputAction::ToggleAgent,
         KeyCode::Char('t') => InputAction::ToggleThinking,
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::OpenRenamePopup
+        }
         _ => InputAction::None,
     }
 }
@@ -458,14 +482,16 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputAction {
 fn handle_insert(app: &mut App, key: KeyEvent) -> InputAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return InputAction::OpenRenamePopup;
+            }
             KeyCode::Char('t') => return InputAction::CycleThinkingLevel,
             KeyCode::Char('a') => {
                 app.move_cursor_home();
                 return InputAction::None;
             }
             KeyCode::Char('e') => {
-                app.move_cursor_end();
-                return InputAction::None;
+                return InputAction::OpenExternalEditor;
             }
             KeyCode::Char('w') => {
                 app.delete_word_before();
@@ -591,8 +617,7 @@ fn handle_simple(app: &mut App, key: KeyEvent) -> InputAction {
                 return InputAction::None;
             }
             KeyCode::Char('e') => {
-                app.move_cursor_end();
-                return InputAction::None;
+                return InputAction::OpenExternalEditor;
             }
             KeyCode::Char('w') => {
                 app.delete_word_before();
@@ -612,6 +637,9 @@ fn handle_simple(app: &mut App, key: KeyEvent) -> InputAction {
                     app.insert_char('\n');
                 }
                 return InputAction::None;
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return InputAction::OpenRenamePopup;
             }
             _ => {}
         }
@@ -685,7 +713,7 @@ fn handle_simple(app: &mut App, key: KeyEvent) -> InputAction {
         }
         KeyCode::PageUp => InputAction::ScrollUp(20),
         KeyCode::PageDown => InputAction::ScrollDown(20),
-        KeyCode::Tab => InputAction::OpenAgentSelector,
+        KeyCode::Tab => InputAction::ToggleAgent,
         KeyCode::Char(c) => handle_char_input(app, c),
         KeyCode::Backspace => handle_backspace(app),
         KeyCode::Left => {
@@ -721,8 +749,18 @@ fn handle_send(app: &mut App) -> InputAction {
             let args = parts.next().unwrap_or_default().to_string();
             let builtin = matches!(
                 cmd.as_str(),
-                "model" | "agent" | "thinking" | "sessions" | "new" | "clear" | "help"
+                "model" | "agent" | "thinking" | "sessions" | "new" | "clear" | "help" | "export"
             );
+            if cmd == "rename" {
+                return if args.is_empty() {
+                    InputAction::OpenRenamePopup
+                } else {
+                    InputAction::RenameSession(args)
+                };
+            }
+            if cmd == "export" {
+                return InputAction::ExportSession(if args.is_empty() { None } else { Some(args) });
+            }
             if builtin {
                 return execute_command(app, &cmd);
             }
@@ -1029,6 +1067,35 @@ fn compute_click_cursor_pos(input: &str, target_col: usize, target_row: usize) -
     }
 
     byte_pos
+}
+
+fn handle_rename_popup(app: &mut App, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.rename_visible = false;
+            app.rename_input.clear();
+            InputAction::None
+        }
+        KeyCode::Enter => {
+            let title = app.rename_input.trim().to_string();
+            app.rename_visible = false;
+            app.rename_input.clear();
+            if title.is_empty() {
+                InputAction::None
+            } else {
+                InputAction::RenameSession(title)
+            }
+        }
+        KeyCode::Backspace => {
+            app.rename_input.pop();
+            InputAction::None
+        }
+        KeyCode::Char(c) => {
+            app.rename_input.push(c);
+            InputAction::None
+        }
+        _ => InputAction::None,
+    }
 }
 
 fn handle_question_popup(app: &mut App, key: KeyEvent) -> InputAction {

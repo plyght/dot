@@ -50,7 +50,10 @@ fn render_tool_calls_inner(
 
         if !tc.detail.is_empty() {
             match &tc.category {
-                ToolCategory::FileRead | ToolCategory::FileWrite | ToolCategory::Directory => {
+                ToolCategory::FileRead
+                | ToolCategory::FileWrite
+                | ToolCategory::MultiEdit
+                | ToolCategory::Directory => {
                     header_spans.push(Span::styled(tc.detail.clone(), theme.tool_path));
                 }
                 ToolCategory::Command => {
@@ -87,6 +90,9 @@ fn render_tool_calls_inner(
                 ToolCategory::Snapshot => {
                     header_spans.push(Span::styled(tc.detail.clone(), theme.dim));
                 }
+                ToolCategory::Batch => {
+                    header_spans.push(Span::styled(tc.detail.clone(), theme.dim));
+                }
                 ToolCategory::Question => {
                     header_spans.push(Span::styled(tc.detail.clone(), theme.dim));
                 }
@@ -103,7 +109,10 @@ fn render_tool_calls_inner(
         let should_show = if tc.is_error {
             true
         } else if !show_verbose_output {
-            matches!(tc.category, ToolCategory::FileWrite | ToolCategory::Patch)
+            matches!(
+                tc.category,
+                ToolCategory::FileWrite | ToolCategory::Patch | ToolCategory::MultiEdit
+            )
         } else {
             !matches!(tc.category, ToolCategory::FileRead)
         };
@@ -224,7 +233,10 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
 
         if !detail.is_empty() {
             match &category {
-                ToolCategory::FileRead | ToolCategory::FileWrite | ToolCategory::Directory => {
+                ToolCategory::FileRead
+                | ToolCategory::FileWrite
+                | ToolCategory::MultiEdit
+                | ToolCategory::Directory => {
                     tool_spans.push(Span::styled(detail, app.theme.tool_path));
                 }
                 ToolCategory::Command => {
@@ -309,6 +321,7 @@ pub fn tool_category_style(category: &ToolCategory, theme: &Theme) -> Style {
     match category {
         ToolCategory::FileRead => theme.tool_file_read,
         ToolCategory::FileWrite => theme.tool_file_write,
+        ToolCategory::MultiEdit => theme.tool_file_write,
         ToolCategory::Directory => theme.tool_directory,
         ToolCategory::Search => theme.tool_search,
         ToolCategory::Command => theme.tool_command,
@@ -317,6 +330,7 @@ pub fn tool_category_style(category: &ToolCategory, theme: &Theme) -> Style {
         ToolCategory::Glob | ToolCategory::Grep => theme.tool_search,
         ToolCategory::WebFetch => theme.tool_mcp,
         ToolCategory::Patch => theme.tool_file_write,
+        ToolCategory::Batch => theme.tool_command,
         ToolCategory::Snapshot => theme.tool_directory,
         ToolCategory::Question => theme.tool_skill,
         ToolCategory::Unknown => theme.tool_name,

@@ -12,7 +12,7 @@ use crate::db::Db;
 use crate::extension::{Event, EventContext, HookRegistry, HookResult};
 use crate::provider::{ContentBlock, Message, Provider, Role, StreamEventType, Usage};
 use crate::tools::ToolRegistry;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -73,11 +73,15 @@ impl Agent {
         let conversation_id =
             db.create_conversation(providers[0].model(), providers[0].name(), &cwd)?;
         tracing::debug!("Agent created with conversation {}", conversation_id);
-        let profiles = if profiles.is_empty() {
+        let mut profiles = if profiles.is_empty() {
             vec![AgentProfile::default_profile()]
         } else {
             profiles
         };
+        if !profiles.iter().any(|p| p.name == "plan") {
+            let at = 1.min(profiles.len());
+            profiles.insert(at, AgentProfile::plan_profile());
+        }
         Ok(Agent {
             providers,
             active: 0,
@@ -258,6 +262,11 @@ impl Agent {
             .get_conversation(&self.conversation_id)
             .ok()
             .and_then(|c| c.title)
+    }
+    pub fn rename_session(&self, title: &str) -> Result<()> {
+        self.db
+            .update_conversation_title(&self.conversation_id, title)
+            .context("failed to rename session")
     }
     pub fn cwd(&self) -> &str {
         &self.cwd
@@ -776,6 +785,39 @@ impl Agent {
                                 Err(e) => e.to_string(),
                             }
                         };
+                    let _ = event_tx.send(AgentEvent::ToolCallResult {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        output: output.clone(),
+                        is_error: false,
+                    });
+                    result_blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content: output,
+                        is_error: false,
+                    });
+                    continue;
+                }
+                // Virtual tool: batch
+                if tc.name == "batch" {
+                    let invocations = input_value
+                        .get("invocations")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    tracing::debug!("batch: {} invocations", invocations.len());
+                    let results: Vec<serde_json::Value> = invocations
+                        .iter()
+                        .map(|inv| {
+                            let name = inv.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                            let input = inv.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                            match self.tools.execute(name, input) {
+                                Ok(out) => serde_json::json!({ "tool_name": name, "result": out, "is_error": false }),
+                                Err(e) => serde_json::json!({ "tool_name": name, "result": e.to_string(), "is_error": true }),
+                            }
+                        })
+                        .collect();
+                    let output = serde_json::to_string(&results).unwrap_or_else(|e| e.to_string());
                     let _ = event_tx.send(AgentEvent::ToolCallResult {
                         id: tc.id.clone(),
                         name: tc.name.clone(),

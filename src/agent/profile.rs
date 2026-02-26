@@ -24,6 +24,23 @@ impl AgentProfile {
         }
     }
 
+    pub fn plan_profile() -> Self {
+        let mut filter = HashMap::new();
+        filter.insert("write_file".to_string(), false);
+        filter.insert("run_command".to_string(), false);
+        filter.insert("apply_patch".to_string(), false);
+        filter.insert("web_fetch".to_string(), false);
+        filter.insert("multiedit".to_string(), false);
+        filter.insert("batch".to_string(), false);
+        AgentProfile {
+            name: "plan".to_string(),
+            description: "Read-only planning assistant".to_string(),
+            system_prompt: "You are a planning assistant. You can read and analyze code but cannot make changes. Help the user understand codebases, plan approaches, and think through problems. You have access to file reading, search, and grep tools only.".to_string(),
+            model_spec: None,
+            tool_filter: filter,
+        }
+    }
+
     pub fn from_config(name: &str, cfg: &AgentConfig) -> Self {
         let system_prompt = cfg
             .system_prompt

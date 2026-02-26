@@ -1,6 +1,8 @@
+pub mod batch;
 pub mod file;
 pub mod glob;
 pub mod grep;
+pub mod multiedit;
 pub mod patch;
 pub mod shell;
 pub mod web;
@@ -88,6 +90,8 @@ impl ToolRegistry {
         registry.register(Box::new(grep::GrepTool));
         registry.register(Box::new(web::WebFetchTool));
         registry.register(Box::new(patch::ApplyPatchTool));
+        registry.register(Box::new(multiedit::MultiEditTool));
+        registry.register(Box::new(batch::BatchTool));
         registry
     }
 }

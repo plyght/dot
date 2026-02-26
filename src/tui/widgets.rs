@@ -12,6 +12,7 @@ pub struct ModelSelector {
     pub query: String,
     pub current_provider: String,
     pub current_model: String,
+    pub favorites: Vec<String>,
 }
 
 impl Default for ModelSelector {
@@ -30,6 +31,7 @@ impl ModelSelector {
             query: String::new(),
             current_provider: String::new(),
             current_model: String::new(),
+            favorites: Vec::new(),
         }
     }
 
@@ -60,6 +62,17 @@ impl ModelSelector {
         }
     }
 
+    pub fn toggle_favorite(&mut self) -> Option<String> {
+        let idx = *self.filtered.get(self.selected)?;
+        let model = self.entries[idx].model.clone();
+        if let Some(pos) = self.favorites.iter().position(|f| f == &model) {
+            self.favorites.remove(pos);
+        } else {
+            self.favorites.push(model.clone());
+        }
+        Some(model)
+    }
+
     pub fn apply_filter(&mut self) {
         let q = self.query.to_lowercase();
         self.filtered = self
@@ -74,6 +87,11 @@ impl ModelSelector {
             })
             .map(|(i, _)| i)
             .collect();
+        self.filtered.sort_by(|&a, &b| {
+            let a_fav = self.favorites.contains(&self.entries[a].model);
+            let b_fav = self.favorites.contains(&self.entries[b].model);
+            b_fav.cmp(&a_fav)
+        });
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -226,8 +244,19 @@ pub const COMMANDS: &[SlashCommand] = &[
         description: "start new conversation",
         shortcut: "",
     },
+    SlashCommand {
+        name: "rename",
+        aliases: &["r"],
+        description: "rename this session",
+        shortcut: "^R",
+    },
+    SlashCommand {
+        name: "export",
+        aliases: &["e"],
+        description: "export session to markdown",
+        shortcut: "",
+    },
 ];
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaletteEntryKind {
     Command,

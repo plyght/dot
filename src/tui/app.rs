@@ -224,8 +224,10 @@ pub struct App {
     pub history_draft: String,
     pub skill_entries: Vec<(String, String)>,
     pub custom_command_names: Vec<String>,
+    pub rename_input: String,
+    pub rename_visible: bool,
+    pub favorite_models: Vec<String>,
 }
-
 impl App {
     pub fn new(
         model_name: String,
@@ -291,6 +293,9 @@ impl App {
             history_draft: String::new(),
             skill_entries: Vec::new(),
             custom_command_names: Vec::new(),
+            rename_input: String::new(),
+            rename_visible: false,
+            favorite_models: Vec::new(),
         }
     }
 

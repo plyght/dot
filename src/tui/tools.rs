@@ -2,6 +2,7 @@
 pub enum ToolCategory {
     FileRead,
     FileWrite,
+    MultiEdit,
     Directory,
     Search,
     Command,
@@ -9,6 +10,7 @@ pub enum ToolCategory {
     Grep,
     WebFetch,
     Patch,
+    Batch,
     Snapshot,
     Question,
     Mcp { server: String },
@@ -21,6 +23,7 @@ impl ToolCategory {
         match name {
             "read_file" => Self::FileRead,
             "write_file" => Self::FileWrite,
+            "multiedit" => Self::MultiEdit,
             "list_directory" => Self::Directory,
             "search_files" => Self::Search,
             "run_command" => Self::Command,
@@ -28,6 +31,7 @@ impl ToolCategory {
             "grep" => Self::Grep,
             "webfetch" => Self::WebFetch,
             "apply_patch" => Self::Patch,
+            "batch" => Self::Batch,
             "snapshot_list" | "snapshot_restore" => Self::Snapshot,
             "question" => Self::Question,
             "skill" => Self::Skill,
@@ -53,6 +57,7 @@ impl ToolCategory {
         match self {
             Self::FileRead => "\u{f15c} ",
             Self::FileWrite => "\u{270e} ",
+            Self::MultiEdit => "\u{270e} ",
             Self::Directory => "\u{f07b} ",
             Self::Search => "\u{f002} ",
             Self::Command => "\u{f120} ",
@@ -60,6 +65,7 @@ impl ToolCategory {
             Self::Grep => "\u{f002} ",
             Self::WebFetch => "\u{f0ac} ",
             Self::Patch => "\u{270e} ",
+            Self::Batch => "\u{f0c2} ",
             Self::Snapshot => "\u{f0c2} ",
             Self::Question => "\u{f128} ",
             Self::Mcp { .. } => "\u{f1e6} ",
@@ -72,6 +78,7 @@ impl ToolCategory {
         match self {
             Self::FileRead => "read".to_string(),
             Self::FileWrite => "write".to_string(),
+            Self::MultiEdit => "edit".to_string(),
             Self::Directory => "list".to_string(),
             Self::Search => "search".to_string(),
             Self::Command => "run".to_string(),
@@ -79,6 +86,7 @@ impl ToolCategory {
             Self::Grep => "grep".to_string(),
             Self::WebFetch => "fetch".to_string(),
             Self::Patch => "patch".to_string(),
+            Self::Batch => "batch".to_string(),
             Self::Snapshot => "snapshot".to_string(),
             Self::Question => "question".to_string(),
             Self::Mcp { server } => format!("mcp:{}", server),
@@ -91,6 +99,7 @@ impl ToolCategory {
         match self {
             Self::FileRead => "reading",
             Self::FileWrite => "writing",
+            Self::MultiEdit => "editing",
             Self::Directory => "listing",
             Self::Search => "searching",
             Self::Command => "running",
@@ -98,6 +107,7 @@ impl ToolCategory {
             Self::Grep => "searching",
             Self::WebFetch => "fetching",
             Self::Patch => "patching",
+            Self::Batch => "running",
             Self::Snapshot => "checking",
             Self::Question => "asking",
             Self::Mcp { .. } => "calling",
@@ -191,6 +201,27 @@ pub fn extract_tool_detail(name: &str, input: &str) -> String {
                 .map(|a| a.len())
                 .unwrap_or(0);
             format!("{} patches", count)
+        }
+        "multiedit" => {
+            let path = val
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(shorten_path)
+                .unwrap_or_default();
+            let count = val
+                .get("edits")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            format!("{} ({} edits)", path, count)
+        }
+        "batch" => {
+            let count = val
+                .get("invocations")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            format!("{} tools", count)
         }
         "snapshot_list" => "listing changes".to_string(),
         "snapshot_restore" => val

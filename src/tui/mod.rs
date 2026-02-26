@@ -163,6 +163,7 @@ async fn run_app(
         context_window,
     );
     app.history = history;
+    app.favorite_models = config.tui.favorite_models.clone();
     app.skill_entries = skill_names;
     {
         let agent_lock = agent.lock().await;
@@ -254,8 +255,40 @@ async fn run_app(
             }
         };
 
-        if let LoopSignal::Quit = handle_event(&mut app, &agent, event, &mut agent_rx).await {
-            break;
+        match handle_event(&mut app, &agent, event, &mut agent_rx).await {
+            LoopSignal::Quit => break,
+            LoopSignal::OpenEditor => {
+                let editor = std::env::var("VISUAL")
+                    .or_else(|_| std::env::var("EDITOR"))
+                    .unwrap_or_else(|_| "vi".to_string());
+                let tmp = std::env::temp_dir().join("dot_input.md");
+                let _ = std::fs::write(&tmp, &app.input);
+                terminal::disable_raw_mode()?;
+                execute!(
+                    std::io::stderr(),
+                    terminal::LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture
+                )?;
+                let status = std::process::Command::new(&editor).arg(&tmp).status();
+                execute!(
+                    std::io::stderr(),
+                    terminal::EnterAlternateScreen,
+                    crossterm::event::EnableMouseCapture
+                )?;
+                terminal::enable_raw_mode()?;
+                terminal.clear()?;
+                if status.is_ok() {
+                    if let Ok(contents) = std::fs::read_to_string(&tmp) {
+                        let trimmed = contents.trim_end().to_string();
+                        if !trimmed.is_empty() {
+                            app.cursor_pos = trimmed.len();
+                            app.input = trimmed;
+                        }
+                    }
+                }
+                let _ = std::fs::remove_file(&tmp);
+            }
+            _ => {}
         }
     }
 
@@ -285,6 +318,7 @@ enum LoopSignal {
     Continue,
     Quit,
     CancelStream,
+    OpenEditor,
 }
 
 async fn dispatch_action(
@@ -362,6 +396,7 @@ async fn dispatch_action(
             let current_provider = agent_lock.current_provider_name().to_string();
             let current_model = agent_lock.current_model().to_string();
             drop(agent_lock);
+            app.model_selector.favorites = app.favorite_models.clone();
             app.model_selector
                 .open(grouped, &current_provider, &current_model);
         }
@@ -588,7 +623,86 @@ async fn dispatch_action(
             drop(agent_lock);
             app.scroll_to_bottom();
         }
+        InputAction::ToggleAgent => {
+            let mut agent_lock = agent.lock().await;
+            let current = agent_lock.current_agent_name().to_string();
+            let names: Vec<String> = agent_lock
+                .agent_profiles()
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            let idx = names.iter().position(|n| n == &current).unwrap_or(0);
+            let next = names[(idx + 1) % names.len()].clone();
+            agent_lock.switch_agent(&next);
+            app.agent_name = agent_lock.current_agent_name().to_string();
+            app.model_name = agent_lock.current_model().to_string();
+            app.provider_name = agent_lock.current_provider_name().to_string();
+        }
+        InputAction::ExportSession(path_opt) => {
+            let agent_lock = agent.lock().await;
+            let cwd = agent_lock.cwd().to_string();
+            drop(agent_lock);
+            let title = app
+                .conversation_title
+                .as_deref()
+                .unwrap_or("session")
+                .to_string();
+            let path = match path_opt {
+                Some(p) => p,
+                None => {
+                    let slug: String = title
+                        .chars()
+                        .map(|c| {
+                            if c.is_alphanumeric() {
+                                c.to_ascii_lowercase()
+                            } else {
+                                '-'
+                            }
+                        })
+                        .collect();
+                    format!("{}/session-{}.md", cwd, slug)
+                }
+            };
+            let mut md = format!("# Session: {}\n\n", title);
+            for msg in &app.messages {
+                match msg.role.as_str() {
+                    "user" => {
+                        md.push_str("---\n\n## User\n\n");
+                        md.push_str(&msg.content);
+                        md.push_str("\n\n");
+                    }
+                    "assistant" => {
+                        md.push_str("---\n\n## Assistant\n\n");
+                        md.push_str(&msg.content);
+                        md.push_str("\n\n");
+                        for tc in &msg.tool_calls {
+                            let status = if tc.is_error { "error" } else { "done" };
+                            md.push_str(&format!("- `{}` ({})\n", tc.name, status));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match std::fs::write(&path, &md) {
+                Ok(()) => app.error_message = Some(format!("exported to {}", path)),
+                Err(e) => app.error_message = Some(format!("export failed: {}", e)),
+            }
+        }
+        InputAction::OpenExternalEditor => return LoopSignal::OpenEditor,
         InputAction::AnswerPermission(_) | InputAction::None => {}
+        InputAction::OpenRenamePopup => {
+            app.rename_input = app.conversation_title.clone().unwrap_or_default();
+            app.rename_visible = true;
+        }
+        InputAction::RenameSession(title) => {
+            let agent_lock = agent.lock().await;
+            if let Err(e) = agent_lock.rename_session(&title) {
+                app.error_message = Some(format!("rename failed: {e}"));
+            } else {
+                app.conversation_title = Some(title);
+            }
+            app.rename_visible = false;
+        }
     }
     LoopSignal::Continue
 }

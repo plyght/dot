@@ -75,6 +75,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.pending_permission.is_some() {
         ui_popups::draw_permission_popup(frame, app);
     }
+
+    if app.rename_visible {
+        ui_popups::draw_rename_popup(frame, app);
+    }
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -145,10 +149,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 
     let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
 
-    let show_agent = !compact
-        && !app.agent_name.is_empty()
-        && app.agent_name != "default"
-        && app.agent_name != "dot";
+    let show_agent = !compact && !app.agent_name.is_empty() && app.agent_name != "default";
 
     let agent_width = if show_agent {
         3 + app.agent_name.chars().count()
@@ -176,19 +177,31 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         left_spans.push(sep.clone());
         left_spans.push(Span::styled(
             format!("@{}", app.agent_name),
-            app.theme.status_bar,
+            if app.agent_name == "plan" {
+                app.theme.dim
+            } else {
+                app.theme.status_bar
+            },
         ));
     }
 
     let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
     let gap = (area.width as usize).saturating_sub(left_width + right_width + 1);
 
+    let header_bg = Style::default().bg(app.theme.code_bg);
     let mut spans = left_spans;
-    spans.push(Span::raw(" ".repeat(gap)));
-    spans.extend(right_spans);
+    for s in &mut spans {
+        s.style = s.style.bg(app.theme.code_bg);
+    }
+    spans.push(Span::styled(" ".repeat(gap), header_bg));
+    let mut rspans = right_spans;
+    for s in &mut rspans {
+        s.style = s.style.bg(app.theme.code_bg);
+    }
+    spans.extend(rspans);
 
     let header = Line::from(spans);
-    frame.render_widget(Paragraph::new(header), area);
+    frame.render_widget(Paragraph::new(header).style(header_bg), area);
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -705,12 +718,32 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
     let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
 
-    let context_indicator = if app.context_window > 0 && app.last_input_tokens > 0 {
-        let pct = (app.last_input_tokens as f64 / app.context_window as f64 * 100.0).min(100.0);
-        format!("{:.0}% ", pct)
-    } else {
-        String::new()
-    };
+    let context_indicator: Vec<Span<'static>> =
+        if app.context_window > 0 && app.last_input_tokens > 0 {
+            let pct = (app.last_input_tokens as f64 / app.context_window as f64 * 100.0).min(100.0);
+            let bar_width: usize = if compact { 6 } else { 10 };
+            let filled = ((pct / 100.0) * bar_width as f64).round() as usize;
+            let empty = bar_width.saturating_sub(filled);
+            let bar_color = if pct > 80.0 {
+                Color::Rgb(243, 139, 168)
+            } else if pct > 60.0 {
+                Color::Rgb(249, 226, 175)
+            } else {
+                Color::Rgb(88, 91, 112)
+            };
+            vec![
+                Span::styled("\u{2590}", Style::default().fg(app.theme.code_bg)),
+                Span::styled("\u{2588}".repeat(filled), Style::default().fg(bar_color)),
+                Span::styled(
+                    "\u{2591}".repeat(empty),
+                    Style::default().fg(app.theme.code_bg),
+                ),
+                Span::styled("\u{258c}", Style::default().fg(app.theme.code_bg)),
+                Span::styled(format!(" {:.0}% ", pct), app.theme.dim),
+            ]
+        } else {
+            vec![]
+        };
 
     let hint = if app.model_selector.visible
         || app.agent_selector.visible
@@ -745,15 +778,23 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         "? help "
     };
 
-    let right_width = context_indicator.len() + hint.len();
+    let ctx_width: usize = context_indicator
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum();
+    let right_width = ctx_width + hint.len();
     let padding = (area.width as usize).saturating_sub(left_width + right_width);
 
     let mut line_spans = left_spans;
     line_spans.push(Span::raw(" ".repeat(padding)));
-    line_spans.push(Span::styled(context_indicator, app.theme.dim));
+    line_spans.extend(context_indicator);
     line_spans.push(Span::styled(hint.to_string(), app.theme.dim));
 
-    frame.render_widget(Paragraph::new(Line::from(line_spans)), area);
+    let status_bg = Style::default().bg(app.theme.code_bg);
+    frame.render_widget(
+        Paragraph::new(Line::from(line_spans)).style(status_bg),
+        area,
+    );
 }
 
 pub fn format_elapsed(secs: f64) -> String {

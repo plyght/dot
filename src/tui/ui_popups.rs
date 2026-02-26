@@ -71,9 +71,14 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
             Style::default().fg(Color::Reset)
         };
 
+        let is_fav = sel.favorites.contains(&entry.model);
+        let star = if is_fav { "★ " } else { "  " };
         let mut spans = vec![Span::styled(format!("  {}", prefix), marker_style)];
+        spans.push(Span::styled(
+            star.to_string(),
+            Style::default().fg(app.theme.accent),
+        ));
         spans.push(Span::styled(entry.model.clone(), name_style));
-
         content_lines.push(Line::from(spans));
     }
 
@@ -82,7 +87,7 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
     }
 
     let search_line = format!(" /{}", sel.query);
-    let footer = "\u{2191}\u{2193} select  enter confirm  esc cancel";
+    let footer = "↑↓ select  enter confirm  s/* favorite  esc cancel";
     let content_width = content_lines
         .iter()
         .map(|l| l.width())
@@ -828,5 +833,36 @@ pub fn draw_permission_popup(frame: &mut Frame, app: &mut App) {
         app.theme.dim,
     )));
 
+    frame.render_widget(Paragraph::new(all_lines), inner);
+}
+
+pub fn draw_rename_popup(frame: &mut Frame, app: &App) {
+    let footer = "enter save  esc cancel";
+    let display = format!("{}▏", app.rename_input);
+    let content_lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::raw(" "),
+        Span::styled(display, Style::default().fg(app.theme.accent)),
+    ])];
+    let content_width = content_lines
+        .iter()
+        .map(|l| l.width())
+        .max()
+        .unwrap_or(20)
+        .max(footer.len() + 2)
+        .max(30)
+        + 4;
+    let content_height = content_lines.len() + 3;
+    let popup = centered_popup(frame.area(), content_width, content_height);
+    frame.render_widget(Clear, popup);
+    let block = popup_block("rename session", app.theme.accent, app.theme.muted_fg);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    all_lines.extend(content_lines);
+    all_lines.push(Line::from(""));
+    all_lines.push(Line::from(Span::styled(
+        format!(" {}", footer),
+        app.theme.dim,
+    )));
     frame.render_widget(Paragraph::new(all_lines), inner);
 }

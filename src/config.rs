@@ -77,11 +77,16 @@ pub struct AgentConfig {
 pub struct TuiConfig {
     #[serde(default = "default_true")]
     pub vim_mode: bool,
+    #[serde(default)]
+    pub favorite_models: Vec<String>,
 }
 
 impl Default for TuiConfig {
     fn default() -> Self {
-        Self { vim_mode: true }
+        Self {
+            vim_mode: true,
+            favorite_models: Vec::new(),
+        }
     }
 }
 
