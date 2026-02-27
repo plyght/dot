@@ -186,7 +186,7 @@ pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'stati
         }
 
         if has_completed_tools {
-            render_tool_calls(&app.current_tool_calls, &app.theme, compact, lines);
+            render_tool_calls_compact(&app.current_tool_calls, &app.theme, compact, lines);
             lines.push(Line::from(""));
         }
 

@@ -223,7 +223,7 @@ async fn run_app(
                                 app.current_response.clear();
                                 app.current_thinking.clear();
                                 app.current_tool_calls.clear();
-                                app.error_message = None;
+                                app.status_message = None;
                                 let agent_clone = Arc::clone(&agent);
                                 tokio::spawn(async move {
                                     let mut agent = agent_clone.lock().await;
@@ -355,7 +355,7 @@ async fn dispatch_action(
             // Drop pending question/permission to unblock agent
             app.pending_question = None;
             app.pending_permission = None;
-            app.error_message = Some("cancelled".to_string());
+            app.status_message = Some(app::StatusMessage::info("cancelled"));
             return LoopSignal::CancelStream;
         }
         InputAction::SendMessage(msg) => {
@@ -369,6 +369,7 @@ async fn dispatch_action(
             *agent_rx = Some(rx);
 
             let agent_clone = Arc::clone(agent);
+            let err_tx = tx.clone();
             tokio::spawn(async move {
                 let mut agent = agent_clone.lock().await;
                 let result = if images.is_empty() {
@@ -378,6 +379,7 @@ async fn dispatch_action(
                 };
                 if let Err(e) = result {
                     tracing::error!("Agent send_message error: {}", e);
+                    let _ = err_tx.send(crate::agent::AgentEvent::Error(format!("{e}")));
                 }
             });
         }
@@ -386,7 +388,9 @@ async fn dispatch_action(
             match agent_lock.new_conversation() {
                 Ok(()) => app.clear_conversation(),
                 Err(e) => {
-                    app.error_message = Some(format!("failed to start new conversation: {e}"))
+                    app.status_message = Some(app::StatusMessage::error(format!(
+                        "failed to start new conversation: {e}"
+                    )))
                 }
             }
         }
@@ -474,13 +478,16 @@ async fn dispatch_action(
                         }
                         Err(e) => {
                             drop(agent_lock);
-                            app.error_message = Some(format!("failed to resume session: {e}"));
+                            app.status_message = Some(app::StatusMessage::error(format!(
+                                "failed to resume session: {e}"
+                            )));
                         }
                     }
                 }
                 Err(e) => {
                     drop(agent_lock);
-                    app.error_message = Some(format!("session not found: {e}"));
+                    app.status_message =
+                        Some(app::StatusMessage::error(format!("session not found: {e}")));
                 }
             }
         }
@@ -561,7 +568,8 @@ async fn dispatch_action(
                 }
                 Err(e) => {
                     drop(agent_lock);
-                    app.error_message = Some(format!("fork failed: {e}"));
+                    app.status_message =
+                        Some(app::StatusMessage::error(format!("fork failed: {e}")));
                 }
             }
         }
@@ -617,7 +625,8 @@ async fn dispatch_action(
                     });
                 }
                 Err(e) => {
-                    app.error_message = Some(format!("command error: {}", e));
+                    app.status_message =
+                        Some(app::StatusMessage::error(format!("command error: {e}")));
                 }
             }
             drop(agent_lock);
@@ -684,8 +693,14 @@ async fn dispatch_action(
                 }
             }
             match std::fs::write(&path, &md) {
-                Ok(()) => app.error_message = Some(format!("exported to {}", path)),
-                Err(e) => app.error_message = Some(format!("export failed: {}", e)),
+                Ok(()) => {
+                    app.status_message =
+                        Some(app::StatusMessage::success(format!("exported to {}", path)))
+                }
+                Err(e) => {
+                    app.status_message =
+                        Some(app::StatusMessage::error(format!("export failed: {e}")))
+                }
             }
         }
         InputAction::OpenExternalEditor => return LoopSignal::OpenEditor,
@@ -697,7 +712,7 @@ async fn dispatch_action(
         InputAction::RenameSession(title) => {
             let agent_lock = agent.lock().await;
             if let Err(e) = agent_lock.rename_session(&title) {
-                app.error_message = Some(format!("rename failed: {e}"));
+                app.status_message = Some(app::StatusMessage::error(format!("rename failed: {e}")));
             } else {
                 app.conversation_title = Some(title);
             }
@@ -720,6 +735,9 @@ async fn handle_event(
         AppEvent::Tick => {
             app.tick_count = app.tick_count.wrapping_add(1);
             app.animate_scroll();
+            if app.status_message.as_ref().is_some_and(|s| s.expired()) {
+                app.status_message = None;
+            }
             return LoopSignal::Continue;
         }
         AppEvent::Agent(ev) => {

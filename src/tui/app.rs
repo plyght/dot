@@ -50,6 +50,54 @@ pub struct ImageAttachment {
     pub data: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StatusLevel {
+    Error,
+    Info,
+    Success,
+}
+
+pub struct StatusMessage {
+    pub text: String,
+    pub level: StatusLevel,
+    pub created: Instant,
+}
+
+impl StatusMessage {
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            level: StatusLevel::Error,
+            created: Instant::now(),
+        }
+    }
+
+    pub fn info(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            level: StatusLevel::Info,
+            created: Instant::now(),
+        }
+    }
+
+    pub fn success(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            level: StatusLevel::Success,
+            created: Instant::now(),
+        }
+    }
+
+    pub fn expired(&self) -> bool {
+        let ttl = match self.level {
+            StatusLevel::Error => std::time::Duration::from_secs(8),
+            StatusLevel::Info => std::time::Duration::from_secs(3),
+            StatusLevel::Success => std::time::Duration::from_secs(4),
+        };
+        self.created.elapsed() > ttl
+    }
+}
+
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 
 #[derive(Default)]
@@ -186,7 +234,7 @@ pub struct App {
     pub pending_tool_name: Option<String>,
     pub pending_tool_input: String,
     pub current_tool_calls: Vec<ToolCallDisplay>,
-    pub error_message: Option<String>,
+    pub status_message: Option<StatusMessage>,
     pub model_selector: ModelSelector,
     pub agent_selector: AgentSelector,
     pub command_palette: CommandPalette,
@@ -260,7 +308,7 @@ impl App {
             pending_tool_name: None,
             pending_tool_input: String::new(),
             current_tool_calls: Vec::new(),
-            error_message: None,
+            status_message: None,
             model_selector: ModelSelector::new(),
             agent_selector: AgentSelector::new(),
             command_palette: CommandPalette::new(),
@@ -338,6 +386,8 @@ impl App {
                 }
                 self.current_response.clear();
                 self.current_thinking.clear();
+                self.is_streaming = false;
+                self.streaming_started = None;
             }
             AgentEvent::ToolCallStart { name, .. } => {
                 self.pending_tool_name = Some(name);
@@ -379,7 +429,7 @@ impl App {
             AgentEvent::Error(msg) => {
                 self.is_streaming = false;
                 self.streaming_started = None;
-                self.error_message = Some(msg);
+                self.status_message = Some(StatusMessage::error(msg));
             }
             AgentEvent::Compacting => {
                 self.messages.push(ChatMessage {
@@ -477,7 +527,7 @@ impl App {
         self.current_response.clear();
         self.current_thinking.clear();
         self.current_tool_calls.clear();
-        self.error_message = None;
+        self.status_message = None;
         self.scroll_to_bottom();
         Some(trimmed)
     }
@@ -729,7 +779,7 @@ impl App {
         self.follow_bottom = true;
         self.usage = TokenUsage::default();
         self.last_input_tokens = 0;
-        self.error_message = None;
+        self.status_message = None;
         self.paste_blocks.clear();
         self.attachments.clear();
         self.conversation_title = None;

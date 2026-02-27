@@ -8,7 +8,7 @@ use ratatui::widgets::{
 };
 
 use crate::agent::TodoStatus;
-use crate::tui::app::{App, AppMode, ChatMessage};
+use crate::tui::app::{App, AppMode, ChatMessage, StatusLevel};
 use crate::tui::markdown;
 use crate::tui::theme::Theme;
 use crate::tui::ui_popups;
@@ -263,15 +263,27 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     if app.is_streaming {
+        let before_stream = all_lines.len();
         ui_tools::render_streaming_state(app, inner.width, &mut all_lines);
+        let stream_msg_idx = app.messages.len().saturating_sub(1).max(0);
+        for _ in before_stream..all_lines.len() {
+            line_to_msg.push(stream_msg_idx);
+        }
     }
 
-    if let Some(ref err) = app.error_message {
-        all_lines.push(Line::from(""));
-        all_lines.push(Line::from(Span::styled(
-            format!("    {}", err),
-            app.theme.dim,
-        )));
+    if let Some(ref status) = app.status_message {
+        if !status.expired() {
+            let (icon, style) = match status.level {
+                StatusLevel::Error => ("\u{2718}", app.theme.error),
+                StatusLevel::Info => ("\u{25cb}", app.theme.dim),
+                StatusLevel::Success => ("\u{2714}", app.theme.tool_success),
+            };
+            all_lines.push(Line::from(""));
+            all_lines.push(Line::from(vec![
+                Span::styled(format!("    {} ", icon), style),
+                Span::styled(status.text.clone(), style),
+            ]));
+        }
     }
 
     if all_lines.is_empty() {
@@ -281,14 +293,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let total_visual: u32 = all_lines
         .iter()
         .map(|l| {
-            if area.width == 0 {
+            if inner.width == 0 {
                 return 1u32;
             }
             let chars: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
             if chars == 0 {
                 1
             } else {
-                (chars as u32).div_ceil(area.width as u32).max(1)
+                (chars as u32).div_ceil(inner.width as u32).max(1)
             }
         })
         .sum();
@@ -304,8 +316,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     app.content_width = area.width;
-    app.visual_lines = compute_visual_lines(&all_lines, area.width);
-    app.message_line_map = expand_line_to_msg(&all_lines, &line_to_msg, area.width);
+    app.visual_lines = compute_visual_lines(&all_lines, inner.width);
+    app.message_line_map = expand_line_to_msg(&all_lines, &line_to_msg, inner.width);
 
     let block = Block::default()
         .borders(Borders::TOP)
@@ -429,8 +441,12 @@ fn render_message(
             if let Some(ref thinking) = msg.thinking {
                 render_thinking_block(thinking, thinking_expanded, theme, compact, lines);
             }
-            if !msg.tool_calls.is_empty() && msg.content.is_empty() {
-                ui_tools::render_tool_calls(&msg.tool_calls, theme, compact, lines);
+            if !msg.tool_calls.is_empty() {
+                if msg.content.is_empty() {
+                    ui_tools::render_tool_calls(&msg.tool_calls, theme, compact, lines);
+                } else {
+                    ui_tools::render_tool_calls_compact(&msg.tool_calls, theme, compact, lines);
+                }
             }
             let md_lines = markdown::render_markdown(
                 &msg.content,
@@ -453,9 +469,6 @@ fn render_message(
                     }
                 }
                 lines.push(Line::from(padded));
-            }
-            if !msg.tool_calls.is_empty() && !msg.content.is_empty() {
-                ui_tools::render_tool_calls_compact(&msg.tool_calls, theme, compact, lines);
             }
         }
     }

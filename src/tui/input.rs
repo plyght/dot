@@ -53,7 +53,7 @@ pub fn handle_paste(app: &mut App, text: String) -> InputAction {
         let path = trimmed.trim().trim_matches('"').trim_matches('\'');
         match app.add_image_attachment(path) {
             Ok(()) => {}
-            Err(e) => app.error_message = Some(e),
+            Err(e) => app.status_message = Some(crate::tui::app::StatusMessage::error(e)),
         }
         return InputAction::None;
     }
@@ -1038,7 +1038,7 @@ fn parse_at_references(app: &mut App) {
             match app.add_image_attachment(path) {
                 Ok(()) => {}
                 Err(e) => {
-                    app.error_message = Some(e);
+                    app.status_message = Some(crate::tui::app::StatusMessage::error(e));
                 }
             }
         }
