@@ -118,7 +118,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     if app.thinking_budget > 0 && !compact {
         right_spans.push(sep.clone());
         right_spans.push(Span::styled(
-            format!("\u{25c7}{}", app.thinking_level().label()),
+            app.thinking_level().label().to_string(),
             app.theme.thinking,
         ));
     }
@@ -318,12 +318,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let visible = content_area.height as u32;
     app.max_scroll = total_visual.saturating_sub(visible).min(u16::MAX as u32) as u16;
     if app.follow_bottom {
-        app.scroll_position = app.max_scroll as f64;
-        app.scroll_velocity = 0.0;
         app.scroll_offset = app.max_scroll;
-    } else if app.scroll_position > app.max_scroll as f64 {
-        app.scroll_position = app.max_scroll as f64;
-        app.scroll_velocity = 0.0;
+    } else if app.scroll_offset > app.max_scroll {
+        app.scroll_offset = app.max_scroll;
     }
 
     app.content_width = area.width;
@@ -338,14 +335,32 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(paragraph, area);
 
-    let frac = app.scroll_frac();
-    if frac > 0.05 && app.scroll_offset < app.max_scroll {
-        let content_y = area.y + 1;
-        let buf = frame.buffer_mut();
-        let alpha = frac as f32;
-        for x in area.x..area.x + area.width {
-            if let Some(cell) = buf.cell_mut(Position::new(x, content_y)) {
-                cell.set_style(Style::default().fg(blend_color(cell.fg, app.theme.bg, alpha)));
+    let code_bg = app.theme.code_bg;
+    let content_y = area.y + 1;
+    let content_h = area.height.saturating_sub(1) as usize;
+    let buf = frame.buffer_mut();
+    let mut is_code: Vec<bool> = (0..content_h)
+        .map(|dy| {
+            buf.cell_mut(Position::new(area.x, content_y + dy as u16))
+                .map(|c| c.bg == code_bg)
+                .unwrap_or(false)
+        })
+        .collect();
+    for i in 1..content_h.saturating_sub(1) {
+        if !is_code[i]
+            && is_code[i.saturating_sub(1)]
+            && is_code.get(i + 1).copied().unwrap_or(false)
+        {
+            is_code[i] = true;
+        }
+    }
+    for (dy, &fill) in is_code.iter().enumerate() {
+        if fill {
+            let y = content_y + dy as u16;
+            for x in area.x..area.x + area.width {
+                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+                    cell.bg = code_bg;
+                }
             }
         }
     }
@@ -397,34 +412,26 @@ fn render_message(
 
     match msg.role.as_str() {
         "user" => {
-            let (marker, cont) = if compact {
-                (" \u{203a} ", "   ")
-            } else {
-                ("  \u{203a} ", "    ")
-            };
-            let mut content_lines = msg.content.lines();
-            if let Some(first) = content_lines.next() {
-                line_to_tool.push(None);
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        marker,
-                        Style::default()
-                            .fg(ctx.theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "you ",
-                        Style::default()
-                            .fg(ctx.theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(first.to_string(), ctx.theme.user_text),
-                ]));
-            }
-            for text_line in content_lines {
+            let marker = if compact { " \u{203a} " } else { "  \u{203a} " };
+            line_to_tool.push(None);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    marker,
+                    Style::default()
+                        .fg(ctx.theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "you",
+                    Style::default()
+                        .fg(ctx.theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            for text_line in msg.content.lines() {
                 line_to_tool.push(None);
                 lines.push(Line::from(Span::styled(
-                    format!("{}{}", cont, text_line),
+                    format!("{}{}", body_indent, text_line),
                     ctx.theme.user_text,
                 )));
             }
@@ -518,6 +525,7 @@ fn render_message(
                                 lines,
                                 Some(line_to_tool),
                                 msg_idx,
+                                ctx.inner_width,
                                 |_| ctx.expanded_tool_calls.contains(&(msg_idx, tool_idx)),
                             );
                             tool_idx += 1;
@@ -534,6 +542,7 @@ fn render_message(
                         lines,
                         Some(line_to_tool),
                         msg_idx,
+                        ctx.inner_width,
                         |i| ctx.expanded_tool_calls.contains(&(msg_idx, i)),
                     );
                 }
@@ -568,6 +577,7 @@ fn render_message(
                         lines,
                         Some(line_to_tool),
                         msg_idx,
+                        ctx.inner_width,
                         |i| ctx.expanded_tool_calls.contains(&(msg_idx, i)),
                     );
                 }
@@ -820,7 +830,8 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         lines
     };
 
-    let paragraph = Paragraph::new(display_lines).wrap(Wrap { trim: false });
+    let wrapped = char_wrap(display_lines, inner.width);
+    let paragraph = Paragraph::new(wrapped);
     frame.render_widget(block, area);
     frame.render_widget(paragraph, inner);
     if can_edit && !app.model_selector.visible {
@@ -1075,6 +1086,46 @@ fn format_tokens(n: u32) -> String {
     }
 }
 
+fn char_wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    if width == 0 {
+        return lines;
+    }
+    let w = width as usize;
+    let mut result = Vec::new();
+    for line in lines {
+        let line_w: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        if line_w <= w {
+            result.push(line);
+            continue;
+        }
+        let mut row: Vec<Span<'static>> = Vec::new();
+        let mut row_len = 0usize;
+        for span in line.spans {
+            let style = span.style;
+            let text = span.content.to_string();
+            let mut seg_start = 0;
+            for (byte_pos, _ch) in text.char_indices() {
+                if row_len >= w {
+                    if seg_start < byte_pos {
+                        row.push(Span::styled(text[seg_start..byte_pos].to_string(), style));
+                    }
+                    result.push(Line::from(std::mem::take(&mut row)));
+                    row_len = 0;
+                    seg_start = byte_pos;
+                }
+                row_len += 1;
+            }
+            if seg_start < text.len() {
+                row.push(Span::styled(text[seg_start..].to_string(), style));
+            }
+        }
+        if !row.is_empty() {
+            result.push(Line::from(row));
+        }
+    }
+    result
+}
+
 fn compute_visual_lines(lines: &[Line], width: u16) -> Vec<String> {
     let mut visual = Vec::new();
     for line in lines {
@@ -1128,34 +1179,6 @@ fn render_selection_highlight(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
     }
-}
-
-fn color_to_rgb(c: Color) -> (u8, u8, u8) {
-    match c {
-        Color::Rgb(r, g, b) => (r, g, b),
-        Color::Black => (0, 0, 0),
-        Color::White => (255, 255, 255),
-        Color::DarkGray => (80, 80, 80),
-        Color::Gray => (160, 160, 160),
-        Color::Red => (204, 36, 29),
-        Color::Green => (152, 195, 121),
-        Color::Yellow => (229, 192, 123),
-        Color::Blue => (97, 175, 239),
-        Color::Magenta => (198, 120, 221),
-        Color::Cyan => (86, 182, 194),
-        _ => (200, 200, 200),
-    }
-}
-
-fn blend_color(fg: Color, bg: Color, t: f32) -> Color {
-    let (fr, fg_g, fb) = color_to_rgb(fg);
-    let (br, bg_g, bb) = color_to_rgb(bg);
-    let inv = 1.0 - t;
-    Color::Rgb(
-        (fr as f32 * inv + br as f32 * t) as u8,
-        (fg_g as f32 * inv + bg_g as f32 * t) as u8,
-        (fb as f32 * inv + bb as f32 * t) as u8,
-    )
 }
 
 fn expand_line_to_tool(

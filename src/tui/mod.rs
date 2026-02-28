@@ -330,7 +330,6 @@ async fn handle_event(
         AppEvent::Paste(text) => input::handle_paste(app, text),
         AppEvent::Tick => {
             app.tick_count = app.tick_count.wrapping_add(1);
-            app.animate_scroll();
             if app.status_message.as_ref().is_some_and(|s| s.expired()) {
                 app.status_message = None;
             }

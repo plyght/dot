@@ -11,6 +11,7 @@ struct ToolCallsRenderCtx<'a> {
     compact: bool,
     show_verbose_output: bool,
     msg_idx: usize,
+    width: u16,
 }
 
 pub fn render_tool_calls(
@@ -20,6 +21,7 @@ pub fn render_tool_calls(
     lines: &mut Vec<Line<'static>>,
     line_to_tool: Option<&mut Vec<Option<(usize, usize)>>>,
     msg_idx: usize,
+    width: u16,
     is_expanded: impl Fn(usize) -> bool,
 ) {
     render_tool_calls_inner(
@@ -29,6 +31,7 @@ pub fn render_tool_calls(
             compact,
             show_verbose_output: true,
             msg_idx,
+            width,
         },
         lines,
         is_expanded,
@@ -43,6 +46,7 @@ pub fn render_tool_calls_compact(
     lines: &mut Vec<Line<'static>>,
     line_to_tool: Option<&mut Vec<Option<(usize, usize)>>>,
     msg_idx: usize,
+    width: u16,
     is_expanded: impl Fn(usize) -> bool,
 ) {
     render_tool_calls_inner(
@@ -52,6 +56,7 @@ pub fn render_tool_calls_compact(
             compact,
             show_verbose_output: false,
             msg_idx,
+            width,
         },
         lines,
         is_expanded,
@@ -67,7 +72,6 @@ fn render_tool_calls_inner(
     mut line_to_tool: Option<&mut Vec<Option<(usize, usize)>>>,
 ) {
     let compact = ctx.compact;
-    let hdr_pad = if compact { "  " } else { "    " };
     let out_pad = if compact { "      " } else { "          " };
 
     for (tool_idx, tc) in tool_calls.iter().enumerate() {
@@ -83,10 +87,25 @@ fn render_tool_calls_inner(
         } else {
             cat_style
         };
-        let mut header_spans = vec![
-            Span::styled(format!("{}{} ", hdr_pad, status_icon), status_style),
-            Span::styled(format!("{:<6}", label), label_style),
-        ];
+
+        let has_content = tc.output.as_ref().map_or(false, |o| !o.is_empty())
+            || matches!(
+                tc.category,
+                ToolCategory::MultiEdit | ToolCategory::Patch | ToolCategory::FileWrite
+            );
+        let expanded = is_expanded(tool_idx);
+
+        let mut header_spans = vec![];
+        if has_content {
+            let arrow = if expanded { "\u{25be}" } else { "\u{25b8}" };
+            let pad = if compact { " " } else { "   " };
+            header_spans.push(Span::styled(format!("{}{}", pad, arrow), ctx.theme.dim));
+        } else {
+            let pad = if compact { "  " } else { "    " };
+            header_spans.push(Span::raw(pad.to_string()));
+        }
+        header_spans.push(Span::styled(format!("{} ", status_icon), status_style));
+        header_spans.push(Span::styled(format!("{:<6}", label), label_style));
 
         if !tc.detail.is_empty() {
             match &tc.category {
@@ -145,7 +164,7 @@ fn render_tool_calls_inner(
         }
 
         lines.push(Line::from(header_spans));
-        if let Some(ref mut ltt) = line_to_tool {
+        if let Some(ltt) = &mut line_to_tool {
             ltt.push(Some((ctx.msg_idx, tool_idx)));
         }
 
@@ -160,20 +179,15 @@ fn render_tool_calls_inner(
             !matches!(tc.category, ToolCategory::FileRead)
         };
 
-        let expanded = is_expanded(tool_idx);
-        if let Some(ref output) = tc.output
+        if expanded {
+            render_expanded_output(tc, ctx, lines, &mut line_to_tool);
+        } else if let Some(ref output) = tc.output
             && should_show
             && !output.is_empty()
         {
-            let (max_lines, max_chars) = if expanded {
-                (usize::MAX, usize::MAX)
-            } else if tc.is_error {
-                (6, 400)
-            } else {
-                (4, 400)
-            };
+            let (max_lines, max_chars) = if tc.is_error { (6, 400) } else { (4, 400) };
             let preview: String = output.chars().take(max_chars).collect();
-            let trimmed = if expanded || output.len() <= max_chars {
+            let trimmed = if output.len() <= max_chars {
                 preview.clone()
             } else {
                 format!("{}\u{2026}", preview)
@@ -190,12 +204,12 @@ fn render_tool_calls_inner(
                     format!("{}{}", out_pad, ol),
                     output_style,
                 )));
-                if let Some(ref mut ltt) = line_to_tool {
+                if let Some(ltt) = &mut line_to_tool {
                     ltt.push(None);
                 }
             }
             let total_lines_in_output = trimmed.lines().count();
-            if !expanded && (total_lines_in_output > max_lines || output.len() > max_chars) {
+            if total_lines_in_output > max_lines || output.len() > max_chars {
                 lines.push(Line::from(Span::styled(
                     format!(
                         "{}\u{2026} {} more lines",
@@ -204,12 +218,172 @@ fn render_tool_calls_inner(
                     ),
                     ctx.theme.dim,
                 )));
-                if let Some(ref mut ltt) = line_to_tool {
+                if let Some(ltt) = &mut line_to_tool {
                     ltt.push(None);
                 }
             }
         }
     }
+}
+
+fn render_expanded_output(
+    tc: &ToolCallDisplay,
+    ctx: &ToolCallsRenderCtx<'_>,
+    lines: &mut Vec<Line<'static>>,
+    line_to_tool: &mut Option<&mut Vec<Option<(usize, usize)>>>,
+) {
+    let compact = ctx.compact;
+    let indent: &str = if compact { "    " } else { "        " };
+    let indent_len: u16 = if compact { 4 } else { 8 };
+    let code_width = ctx.width.saturating_sub(indent_len);
+
+    if code_width < 10 {
+        if let Some(ref output) = tc.output {
+            render_plain_output(output, indent, ctx, lines, line_to_tool);
+        }
+        return;
+    }
+
+    let (content, lang) = expanded_content(tc);
+
+    if content.is_empty() {
+        return;
+    }
+
+    let code_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let mut block = Vec::new();
+    markdown::render_code_block(&lang, &code_lines, ctx.theme, code_width, &mut block);
+
+    for line in block {
+        let mut padded = vec![Span::raw(indent.to_string())];
+        padded.extend(line.spans);
+        lines.push(Line::from(padded));
+        if let Some(ltt) = line_to_tool {
+            ltt.push(None);
+        }
+    }
+}
+
+fn expanded_content(tc: &ToolCallDisplay) -> (String, String) {
+    match &tc.category {
+        ToolCategory::FileRead => {
+            let content = tc.output.clone().unwrap_or_default();
+            let lang = lang_from_path(&tc.detail);
+            (content, lang)
+        }
+        ToolCategory::FileWrite => {
+            if let Some(written) = extract_write_content(&tc.input) {
+                (written, lang_from_path(&tc.detail))
+            } else {
+                (tc.output.clone().unwrap_or_default(), String::new())
+            }
+        }
+        ToolCategory::MultiEdit => {
+            if let Some(diff) = generate_edit_diff(&tc.input) {
+                (diff, "diff".to_string())
+            } else {
+                (tc.output.clone().unwrap_or_default(), String::new())
+            }
+        }
+        ToolCategory::Patch => {
+            if let Some(diff) = generate_patch_diff(&tc.input) {
+                (diff, "diff".to_string())
+            } else {
+                (tc.output.clone().unwrap_or_default(), String::new())
+            }
+        }
+        ToolCategory::Command => (tc.output.clone().unwrap_or_default(), String::new()),
+        _ => (tc.output.clone().unwrap_or_default(), String::new()),
+    }
+}
+
+fn render_plain_output(
+    output: &str,
+    indent: &str,
+    ctx: &ToolCallsRenderCtx<'_>,
+    lines: &mut Vec<Line<'static>>,
+    line_to_tool: &mut Option<&mut Vec<Option<(usize, usize)>>>,
+) {
+    let style = if output.is_empty() {
+        return;
+    } else {
+        ctx.theme.tool_output
+    };
+
+    for ol in output.lines() {
+        lines.push(Line::from(Span::styled(format!("{}{}", indent, ol), style)));
+        if let Some(ltt) = line_to_tool {
+            ltt.push(None);
+        }
+    }
+}
+
+fn lang_from_path(path: &str) -> String {
+    path.rsplit('.')
+        .next()
+        .filter(|ext| ext.len() <= 10 && ext.chars().all(|c| c.is_alphanumeric()))
+        .unwrap_or("")
+        .to_string()
+}
+
+fn extract_write_content(input: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(input).ok()?;
+    val.get("content")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn generate_edit_diff(input: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(input).ok()?;
+    let edits = val.get("edits")?.as_array()?;
+    if edits.is_empty() {
+        return None;
+    }
+    let mut diff = String::new();
+    for (i, edit) in edits.iter().enumerate() {
+        let old = edit.get("old_text").and_then(|v| v.as_str()).unwrap_or("");
+        let new = edit.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
+        if edits.len() > 1 {
+            diff.push_str(&format!("@@ edit {} @@\n", i + 1));
+        }
+        for line in old.lines() {
+            diff.push('-');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+        for line in new.lines() {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+    }
+    if diff.is_empty() { None } else { Some(diff) }
+}
+
+fn generate_patch_diff(input: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(input).ok()?;
+    let patches = val.get("patches")?.as_array()?;
+    if patches.is_empty() {
+        return None;
+    }
+    let mut diff = String::new();
+    for patch in patches {
+        let path = patch.get("path").and_then(|v| v.as_str()).unwrap_or("file");
+        let old = patch.get("old").and_then(|v| v.as_str()).unwrap_or("");
+        let new = patch.get("new").and_then(|v| v.as_str()).unwrap_or("");
+        diff.push_str(&format!("@@ {} @@\n", path));
+        for line in old.lines() {
+            diff.push('-');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+        for line in new.lines() {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+    }
+    if diff.is_empty() { None } else { Some(diff) }
 }
 
 pub fn render_streaming_state(
@@ -277,6 +451,7 @@ pub fn render_streaming_state(
                         lines,
                         None,
                         0,
+                        width,
                         |_| false,
                     );
                     prev_was_tool = true;

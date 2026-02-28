@@ -232,8 +232,6 @@ pub struct App {
     pub cursor_pos: usize,
     pub scroll_offset: u16,
     pub max_scroll: u16,
-    pub scroll_position: f64,
-    pub scroll_velocity: f64,
     pub is_streaming: bool,
     pub current_response: String,
     pub current_thinking: String,
@@ -312,8 +310,6 @@ impl App {
             cursor_pos: 0,
             scroll_offset: 0,
             max_scroll: 0,
-            scroll_position: 0.0,
-            scroll_velocity: 0.0,
             is_streaming: false,
             current_response: String::new(),
             current_thinking: String::new(),
@@ -805,57 +801,24 @@ impl App {
 
     pub fn scroll_up(&mut self, n: u16) {
         self.follow_bottom = false;
-        self.scroll_velocity -= n as f64 * 0.25;
-        self.scroll_velocity = self.scroll_velocity.clamp(-40.0, 40.0);
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }
 
     pub fn scroll_down(&mut self, n: u16) {
-        self.scroll_velocity += n as f64 * 0.25;
-        self.scroll_velocity = self.scroll_velocity.clamp(-40.0, 40.0);
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(self.max_scroll);
+        if self.scroll_offset >= self.max_scroll {
+            self.follow_bottom = true;
+        }
     }
 
     pub fn scroll_to_top(&mut self) {
         self.follow_bottom = false;
-        self.scroll_position = 0.0;
-        self.scroll_velocity = 0.0;
+        self.scroll_offset = 0;
     }
 
     pub fn scroll_to_bottom(&mut self) {
         self.follow_bottom = true;
-        self.scroll_position = self.max_scroll as f64;
-        self.scroll_velocity = 0.0;
-    }
-
-    pub fn scroll_frac(&self) -> f64 {
-        self.scroll_position - self.scroll_position.floor()
-    }
-
-    pub fn animate_scroll(&mut self) {
-        if self.scroll_velocity.abs() < 0.01 && self.scroll_position == self.scroll_position.round()
-        {
-            return;
-        }
-
-        self.scroll_position += self.scroll_velocity;
-        self.scroll_velocity *= 0.78;
-
-        if self.scroll_velocity.abs() < 0.08 {
-            self.scroll_velocity = 0.0;
-            self.scroll_position = self.scroll_position.round();
-        }
-
-        if self.scroll_position < 0.0 {
-            self.scroll_position = 0.0;
-            self.scroll_velocity = 0.0;
-        }
-        let max = self.max_scroll as f64;
-        if self.scroll_position > max {
-            self.scroll_position = max;
-            self.scroll_velocity = 0.0;
-            self.follow_bottom = true;
-        }
-
-        self.scroll_offset = self.scroll_position.round() as u16;
+        self.scroll_offset = self.max_scroll;
     }
 
     pub fn clear_conversation(&mut self) {
@@ -865,8 +828,6 @@ impl App {
         self.current_tool_calls.clear();
         self.streaming_segments.clear();
         self.scroll_offset = 0;
-        self.scroll_position = 0.0;
-        self.scroll_velocity = 0.0;
         self.max_scroll = 0;
         self.follow_bottom = true;
         self.usage = TokenUsage::default();

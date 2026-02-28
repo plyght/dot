@@ -73,6 +73,11 @@ pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'stati
             } else {
                 in_code_block = true;
                 code_lang = raw_line.trim_start_matches('`').trim().to_string();
+                if let Some(last) = lines.last() {
+                    if last.spans.iter().all(|s| s.content.trim().is_empty()) {
+                        lines.pop();
+                    }
+                }
             }
             continue;
         }
@@ -189,7 +194,7 @@ pub fn render_markdown(text: &str, theme: &Theme, width: u16) -> Vec<Line<'stati
     deduped
 }
 
-fn render_code_block(
+pub fn render_code_block(
     lang: &str,
     code_lines: &[String],
     theme: &Theme,
@@ -259,9 +264,13 @@ fn render_code_block(
                     let mut content_len = pad_len;
                     for (style, text) in ranges {
                         let fg = style.foreground;
-                        content_len += text.chars().count();
+                        let clean = text.trim_end_matches('\n');
+                        if clean.is_empty() {
+                            continue;
+                        }
+                        content_len += clean.chars().count();
                         spans.push(Span::styled(
-                            text.to_string(),
+                            clean.to_string(),
                             Style::default().fg(Color::Rgb(fg.r, fg.g, fg.b)).bg(bg),
                         ));
                     }
