@@ -37,6 +37,18 @@ pub fn detect_terminal_background() -> TerminalBackground {
     TerminalBackground::Dark
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SyntaxStyles {
+    pub keyword: Style,
+    pub string: Style,
+    pub comment: Style,
+    pub function: Style,
+    pub type_name: Style,
+    pub number: Style,
+    pub constant: Style,
+    pub attribute: Style,
+}
+
 pub struct Theme {
     pub bg: Color,
     pub fg: Color,
@@ -83,6 +95,7 @@ pub struct Theme {
     pub separator: Style,
     pub tool_exit_ok: Style,
     pub tool_exit_err: Style,
+    pub syntax: Option<SyntaxStyles>,
     pub syntect_theme: Option<&'static str>,
     pub diff_add: Style,
     pub diff_remove: Style,
@@ -165,6 +178,7 @@ impl Theme {
             separator: Style::default().fg(Color::Rgb(60, 62, 80)),
             tool_exit_ok: Style::default().fg(green),
             tool_exit_err: Style::default().fg(red),
+            syntax: None,
             syntect_theme: Some("base16-ocean.dark"),
             diff_add: Style::default().fg(green),
             diff_remove: Style::default().fg(red),
@@ -233,6 +247,7 @@ impl Theme {
             separator: Style::default().fg(surface),
             tool_exit_ok: Style::default().fg(green),
             tool_exit_err: Style::default().fg(red),
+            syntax: None,
             syntect_theme: Some("base16-ocean.light"),
             diff_add: Style::default().fg(green),
             diff_remove: Style::default().fg(red),
@@ -298,6 +313,18 @@ impl Theme {
             separator: dim,
             tool_exit_ok: Style::default().fg(green),
             tool_exit_err: Style::default().fg(red),
+            syntax: Some(SyntaxStyles {
+                keyword: Style::default().fg(magenta),
+                string: Style::default().fg(green),
+                comment: Style::default()
+                    .fg(bright_black)
+                    .add_modifier(Modifier::ITALIC),
+                function: Style::default().fg(yellow),
+                type_name: Style::default().fg(cyan),
+                number: Style::default().fg(cyan),
+                constant: Style::default().fg(red),
+                attribute: Style::default().fg(yellow),
+            }),
             syntect_theme: None,
             diff_add: Style::default().fg(green),
             diff_remove: Style::default().fg(red),

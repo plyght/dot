@@ -3,12 +3,69 @@ use std::sync::LazyLock;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxSet};
 
-use crate::tui::theme::Theme;
+use crate::tui::theme::{SyntaxStyles, Theme};
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+
+#[derive(Clone, Copy)]
+enum ScopeKind {
+    Keyword,
+    Str,
+    Comment,
+    Function,
+    Type,
+    Number,
+    Constant,
+    Attribute,
+}
+
+static SCOPE_MATCHERS: LazyLock<Vec<(Scope, ScopeKind)>> = LazyLock::new(|| {
+    use ScopeKind::*;
+    [
+        ("entity.other.attribute-name", Attribute),
+        ("entity.name.function", Function),
+        ("entity.name.type", Type),
+        ("entity.name.class", Type),
+        ("entity.name.tag", Keyword),
+        ("constant.character", Str),
+        ("constant.language", Constant),
+        ("constant.numeric", Number),
+        ("support.function", Function),
+        ("support.type", Type),
+        ("variable.language", Keyword),
+        ("meta.attribute", Attribute),
+        ("keyword", Keyword),
+        ("storage", Keyword),
+        ("comment", Comment),
+        ("string", Str),
+    ]
+    .into_iter()
+    .filter_map(|(s, kind)| Some((Scope::new(s).ok()?, kind)))
+    .collect()
+});
+
+fn resolve_scope(stack: &ScopeStack, styles: &SyntaxStyles) -> Style {
+    for scope in stack.as_slice().iter().rev() {
+        for (prefix, kind) in SCOPE_MATCHERS.iter() {
+            if prefix.is_prefix_of(*scope) {
+                return match kind {
+                    ScopeKind::Keyword => styles.keyword,
+                    ScopeKind::Str => styles.string,
+                    ScopeKind::Comment => styles.comment,
+                    ScopeKind::Function => styles.function,
+                    ScopeKind::Type => styles.type_name,
+                    ScopeKind::Number => styles.number,
+                    ScopeKind::Constant => styles.constant,
+                    ScopeKind::Attribute => styles.attribute,
+                };
+            }
+        }
+    }
+    Style::default()
+}
 
 fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
@@ -203,8 +260,10 @@ pub fn render_code_block(
 ) {
     let w = width as usize;
     let bg = theme.code_bg;
-    let pad = "  ";
-    let pad_len = 2;
+    let pad = " ";
+    let pad_len = 1;
+
+    output.push(Line::from(""));
 
     let fill = |content_len: usize| -> String { " ".repeat(w.saturating_sub(content_len)) };
 
@@ -293,6 +352,59 @@ pub fn render_code_block(
                 Style::default().bg(bg),
             )));
         }
+    } else if let Some(styles) = &theme.syntax
+        && !lang.is_empty()
+        && let Some(syntax) = SYNTAX_SET.find_syntax_by_token(lang)
+    {
+        let mut state = ParseState::new(syntax);
+        let mut stack = ScopeStack::new();
+        for raw_line in code_lines {
+            let line = &truncate_code_line(raw_line, w.saturating_sub(pad_len));
+            match state.parse_line(line, &SYNTAX_SET) {
+                Ok(ops) => {
+                    let mut spans = vec![Span::styled(pad, Style::default().bg(bg))];
+                    let mut content_len = pad_len;
+                    let mut prev = 0;
+                    for (pos, op) in &ops {
+                        let pos = (*pos).min(line.len());
+                        if pos > prev {
+                            let text = &line[prev..pos];
+                            content_len += text.chars().count();
+                            spans.push(Span::styled(
+                                text.to_string(),
+                                resolve_scope(&stack, styles).bg(bg),
+                            ));
+                        }
+                        let _ = stack.apply(op);
+                        prev = pos;
+                    }
+                    if prev < line.len() {
+                        let text = &line[prev..];
+                        content_len += text.chars().count();
+                        spans.push(Span::styled(
+                            text.to_string(),
+                            resolve_scope(&stack, styles).bg(bg),
+                        ));
+                    }
+                    spans.push(Span::styled(fill(content_len), Style::default().bg(bg)));
+                    output.push(Line::from(spans));
+                }
+                Err(_) => {
+                    let content = format!("{}{}", pad, line);
+                    let content_len = content.chars().count();
+                    output.push(Line::from(vec![
+                        Span::styled(content, Style::default().fg(theme.fg).bg(bg)),
+                        Span::styled(fill(content_len), Style::default().bg(bg)),
+                    ]));
+                }
+            }
+        }
+        if code_lines.is_empty() {
+            output.push(Line::from(Span::styled(
+                " ".repeat(w),
+                Style::default().bg(bg),
+            )));
+        }
     } else {
         let code_style = Style::default().fg(theme.fg).bg(bg);
         for raw_line in code_lines {
@@ -312,11 +424,7 @@ pub fn render_code_block(
         }
     }
 
-    // Bottom padding line on code_bg
-    output.push(Line::from(Span::styled(
-        " ".repeat(w),
-        Style::default().bg(bg),
-    )));
+    output.push(Line::from(""));
 }
 
 #[allow(clippy::while_let_on_iterator)]

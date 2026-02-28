@@ -386,12 +386,7 @@ fn generate_patch_diff(input: &str) -> Option<String> {
     if diff.is_empty() { None } else { Some(diff) }
 }
 
-pub fn render_streaming_state(
-    app: &App,
-    width: u16,
-    render_width: u16,
-    lines: &mut Vec<Line<'static>>,
-) {
+pub fn render_streaming_state(app: &App, width: u16, lines: &mut Vec<Line<'static>>) {
     let compact = width < 55;
     let pad = if compact { "  " } else { "    " };
     let pad_cols: u16 = if compact { 2 } else { 4 };
@@ -422,13 +417,12 @@ pub fn render_streaming_state(
                         markdown::render_markdown(t, &app.theme, width.saturating_sub(pad_cols));
                     for line in md_lines {
                         let bg = line.spans.first().and_then(|s| s.style.bg);
-                        let indent_style = bg.map(|c| Style::default().bg(c)).unwrap_or_default();
-                        let mut padded = vec![Span::styled(pad, indent_style)];
+                        let mut padded = vec![Span::raw(pad.to_string())];
                         padded.extend(line.spans);
                         if let Some(c) = bg {
                             let used: usize =
                                 padded.iter().map(|s| s.content.chars().count()).sum();
-                            let target = render_width as usize;
+                            let target = width as usize;
                             if used < target {
                                 padded.push(Span::styled(
                                     " ".repeat(target - used),
@@ -470,12 +464,11 @@ pub fn render_streaming_state(
             );
             for line in md_lines {
                 let bg = line.spans.first().and_then(|s| s.style.bg);
-                let indent_style = bg.map(|c| Style::default().bg(c)).unwrap_or_default();
-                let mut padded = vec![Span::styled(pad, indent_style)];
+                let mut padded = vec![Span::raw(pad.to_string())];
                 padded.extend(line.spans);
                 if let Some(c) = bg {
                     let used: usize = padded.iter().map(|s| s.content.chars().count()).sum();
-                    let target = render_width as usize;
+                    let target = width as usize;
                     if used < target {
                         padded.push(Span::styled(
                             " ".repeat(target - used),

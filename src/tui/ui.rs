@@ -224,7 +224,6 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 theme: &app.theme,
                 thinking_expanded: app.thinking_expanded,
                 inner_width: inner.width,
-                render_width: area.width,
                 expanded_tool_calls: &app.expanded_tool_calls,
             },
             &mut all_lines,
@@ -271,7 +270,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if app.is_streaming {
         let before_stream = all_lines.len();
-        ui_tools::render_streaming_state(app, inner.width, area.width, &mut all_lines);
+        ui_tools::render_streaming_state(app, inner.width, &mut all_lines);
         let stream_msg_idx = app.messages.len().saturating_sub(1).max(0);
         for _ in before_stream..all_lines.len() {
             line_to_msg.push(stream_msg_idx);
@@ -338,10 +337,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let code_bg = app.theme.code_bg;
     let content_y = area.y + 1;
     let content_h = area.height.saturating_sub(1) as usize;
+    let body_cols = if is_compact(area.width) { 2u16 } else { 4u16 };
+    let bg_left = area.x + body_cols;
+    let bg_right = area.x + inner.width;
     let buf = frame.buffer_mut();
     let mut is_code: Vec<bool> = (0..content_h)
         .map(|dy| {
-            buf.cell_mut(Position::new(area.x, content_y + dy as u16))
+            buf.cell_mut(Position::new(bg_left, content_y + dy as u16))
                 .map(|c| c.bg == code_bg)
                 .unwrap_or(false)
         })
@@ -357,7 +359,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     for (dy, &fill) in is_code.iter().enumerate() {
         if fill {
             let y = content_y + dy as u16;
-            for x in area.x..area.x + area.width {
+            for x in bg_left..bg_right {
                 if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
                     cell.bg = code_bg;
                 }
@@ -392,7 +394,6 @@ struct MessageRenderCtx<'a> {
     theme: &'a Theme,
     thinking_expanded: bool,
     inner_width: u16,
-    render_width: u16,
     expanded_tool_calls: &'a HashSet<(usize, usize)>,
 }
 
@@ -493,14 +494,12 @@ fn render_message(
                             );
                             for line in md_lines {
                                 let bg = line.spans.first().and_then(|s| s.style.bg);
-                                let indent_style =
-                                    bg.map(|c| Style::default().bg(c)).unwrap_or_default();
-                                let mut padded = vec![Span::styled(body_indent, indent_style)];
+                                let mut padded = vec![Span::raw(body_indent)];
                                 padded.extend(line.spans);
                                 if let Some(bg_color) = bg {
                                     let used: usize =
                                         padded.iter().map(|s| s.content.chars().count()).sum();
-                                    let target = ctx.render_width as usize;
+                                    let target = ctx.inner_width as usize;
                                     if used < target {
                                         padded.push(Span::styled(
                                             " ".repeat(target - used),
@@ -553,12 +552,11 @@ fn render_message(
                 );
                 for line in md_lines {
                     let bg = line.spans.first().and_then(|s| s.style.bg);
-                    let indent_style = bg.map(|c| Style::default().bg(c)).unwrap_or_default();
-                    let mut padded = vec![Span::styled(body_indent, indent_style)];
+                    let mut padded = vec![Span::raw(body_indent)];
                     padded.extend(line.spans);
                     if let Some(bg_color) = bg {
                         let used: usize = padded.iter().map(|s| s.content.chars().count()).sum();
-                        let target = ctx.render_width as usize;
+                        let target = ctx.inner_width as usize;
                         if used < target {
                             padded.push(Span::styled(
                                 " ".repeat(target - used),
