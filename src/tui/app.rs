@@ -45,6 +45,19 @@ pub struct PasteBlock {
     pub line_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChipKind {
+    File,
+    Skill,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputChip {
+    pub start: usize,
+    pub end: usize,
+    pub kind: ChipKind,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageAttachment {
     pub path: String,
@@ -282,6 +295,7 @@ pub struct App {
     pub rename_visible: bool,
     pub favorite_models: Vec<String>,
     pub file_picker: FilePicker,
+    pub chips: Vec<InputChip>,
 }
 impl App {
     pub fn new(
@@ -355,6 +369,7 @@ impl App {
             rename_visible: false,
             favorite_models: Vec::new(),
             file_picker: FilePicker::new(),
+            chips: Vec::new(),
         }
     }
 
@@ -565,6 +580,7 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
         self.paste_blocks.clear();
+        self.chips.clear();
         self.history.push(trimmed.clone());
         self.history_index = None;
         self.history_draft.clear();
@@ -630,6 +646,7 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
         self.paste_blocks.clear();
+        self.chips.clear();
         self.scroll_to_bottom();
         true
     }
@@ -670,19 +687,17 @@ impl App {
 
     pub fn handle_paste(&mut self, text: String) {
         let line_count = text.lines().count();
+        let start = self.cursor_pos;
+        let len = text.len();
+        self.input.insert_str(start, &text);
+        self.adjust_chips(start, 0, len);
+        self.cursor_pos = start + len;
         if line_count >= PASTE_COLLAPSE_THRESHOLD {
-            let start = self.cursor_pos;
-            self.input.insert_str(self.cursor_pos, &text);
-            let end = start + text.len();
-            self.cursor_pos = end;
             self.paste_blocks.push(PasteBlock {
                 start,
-                end,
+                end: start + len,
                 line_count,
             });
-        } else {
-            self.input.insert_str(self.cursor_pos, &text);
-            self.cursor_pos += text.len();
         }
     }
 
@@ -703,6 +718,34 @@ impl App {
                 remaining.end -= len;
             }
         }
+    }
+
+    pub fn chip_at_cursor(&self) -> Option<usize> {
+        self.chips
+            .iter()
+            .position(|c| self.cursor_pos > c.start && self.cursor_pos <= c.end)
+    }
+
+    pub fn delete_chip(&mut self, idx: usize) {
+        let chip = self.chips.remove(idx);
+        let len = chip.end - chip.start;
+        self.input.replace_range(chip.start..chip.end, "");
+        self.cursor_pos = chip.start;
+        self.adjust_chips(chip.start, len, 0);
+    }
+
+    pub fn adjust_chips(&mut self, edit_start: usize, old_len: usize, new_len: usize) {
+        let edit_end = edit_start + old_len;
+        let delta = new_len as isize - old_len as isize;
+        self.chips.retain_mut(|c| {
+            if c.start >= edit_end {
+                c.start = (c.start as isize + delta) as usize;
+                c.end = (c.end as isize + delta) as usize;
+                true
+            } else {
+                c.end <= edit_start
+            }
+        });
     }
 
     pub fn add_image_attachment(&mut self, path: &str) -> Result<(), String> {
@@ -830,6 +873,7 @@ impl App {
         self.last_input_tokens = 0;
         self.status_message = None;
         self.paste_blocks.clear();
+        self.chips.clear();
         self.attachments.clear();
         self.conversation_title = None;
         self.selection.clear();
@@ -846,8 +890,11 @@ impl App {
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor_pos, c);
-        self.cursor_pos += c.len_utf8();
+        let pos = self.cursor_pos;
+        self.input.insert(pos, c);
+        let len = c.len_utf8();
+        self.adjust_chips(pos, 0, len);
+        self.cursor_pos += len;
     }
 
     pub fn delete_char_before(&mut self) {
@@ -859,6 +906,7 @@ impl App {
                 .unwrap_or(0);
             self.cursor_pos -= prev;
             self.input.remove(self.cursor_pos);
+            self.adjust_chips(self.cursor_pos, prev, 0);
         }
     }
 
@@ -909,16 +957,22 @@ impl App {
         } else {
             0
         };
+        let old_len = self.cursor_pos - new_end;
         self.input.replace_range(new_end..self.cursor_pos, "");
+        self.adjust_chips(new_end, old_len, 0);
         self.cursor_pos = new_end;
     }
 
     pub fn delete_to_end(&mut self) {
+        let old_len = self.input.len() - self.cursor_pos;
         self.input.truncate(self.cursor_pos);
+        self.adjust_chips(self.cursor_pos, old_len, 0);
     }
 
     pub fn delete_to_start(&mut self) {
+        let old_len = self.cursor_pos;
         self.input.replace_range(..self.cursor_pos, "");
+        self.adjust_chips(0, old_len, 0);
         self.cursor_pos = 0;
     }
 
@@ -1021,6 +1075,7 @@ impl App {
         self.input = self.history[self.history_index.unwrap()].clone();
         self.cursor_pos = self.input.len();
         self.paste_blocks.clear();
+        self.chips.clear();
     }
 
     pub fn history_next(&mut self) {
@@ -1036,6 +1091,7 @@ impl App {
         }
         self.cursor_pos = self.input.len();
         self.paste_blocks.clear();
+        self.chips.clear();
     }
 }
 

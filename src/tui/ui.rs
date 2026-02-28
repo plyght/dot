@@ -10,7 +10,7 @@ use ratatui::widgets::{
 };
 
 use crate::agent::TodoStatus;
-use crate::tui::app::{App, AppMode, ChatMessage, StatusLevel};
+use crate::tui::app::{App, AppMode, ChatMessage, InputChip, StatusLevel};
 use crate::tui::markdown;
 use crate::tui::theme::Theme;
 use crate::tui::ui_popups;
@@ -182,7 +182,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     if show_agent {
         left_spans.push(sep.clone());
         left_spans.push(Span::styled(
-            format!("@{}", app.agent_name),
+            app.agent_name.clone(),
             if app.agent_name == "plan" {
                 app.theme.dim
             } else {
@@ -194,20 +194,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
     let gap = (area.width as usize).saturating_sub(left_width + right_width + 1);
 
-    let header_bg = Style::default().bg(app.theme.code_bg);
     let mut spans = left_spans;
-    for s in &mut spans {
-        s.style = s.style.bg(app.theme.code_bg);
-    }
-    spans.push(Span::styled(" ".repeat(gap), header_bg));
-    let mut rspans = right_spans;
-    for s in &mut rspans {
-        s.style = s.style.bg(app.theme.code_bg);
-    }
-    spans.extend(rspans);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.extend(right_spans);
 
     let header = Line::from(spans);
-    frame.render_widget(Paragraph::new(header).style(header_bg), area);
+    frame.render_widget(Paragraph::new(header), area);
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -641,6 +633,44 @@ fn render_thinking_block(
     }
 }
 
+fn chip_styled_spans(
+    text: &str,
+    byte_offset: usize,
+    chips: &[InputChip],
+    accent: Color,
+) -> Vec<Span<'static>> {
+    let chip_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
+    let end = byte_offset + text.len();
+    let mut spans = Vec::new();
+    let mut pos = byte_offset;
+    let mut sorted: Vec<&InputChip> = chips
+        .iter()
+        .filter(|c| c.start < end && c.end > byte_offset)
+        .collect();
+    sorted.sort_by_key(|c| c.start);
+    for chip in sorted {
+        let cs = chip.start.max(byte_offset);
+        let ce = chip.end.min(end);
+        if cs > pos {
+            let s = pos - byte_offset;
+            let e = cs - byte_offset;
+            spans.push(Span::raw(text[s..e].to_string()));
+        }
+        let s = cs - byte_offset;
+        let e = ce - byte_offset;
+        spans.push(Span::styled(text[s..e].to_string(), chip_style));
+        pos = ce;
+    }
+    if pos < end {
+        let s = pos - byte_offset;
+        spans.push(Span::raw(text[s..].to_string()));
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(text.to_string()));
+    }
+    spans
+}
+
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let can_edit = !app.vim_mode || app.mode == AppMode::Insert;
     let has_input = !app.input.is_empty() || !app.attachments.is_empty();
@@ -723,12 +753,43 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
             ]));
         }
         let display = app.display_input();
+        let use_chips = app.paste_blocks.is_empty() && !app.chips.is_empty();
         if display.is_empty() && !app.attachments.is_empty() {
             if lines.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled(prompt, prompt_style),
                     Span::styled("add a message or press enter", app.theme.dim),
                 ]));
+            }
+        } else if use_chips {
+            let mut byte_offset: usize = 0;
+            for (i, line) in app.input.split('\n').enumerate() {
+                let mut spans = if i == 0 && app.attachments.is_empty() {
+                    vec![Span::styled(prompt, prompt_style)]
+                } else {
+                    vec![Span::raw("  ")]
+                };
+                spans.extend(chip_styled_spans(
+                    line,
+                    byte_offset,
+                    &app.chips,
+                    app.theme.accent,
+                ));
+                if i == 0
+                    && app.attachments.is_empty()
+                    && app.is_streaming
+                    && !app.message_queue.is_empty()
+                {
+                    spans.push(Span::styled(
+                        format!(" ({} queued)", app.message_queue.len()),
+                        app.theme.dim,
+                    ));
+                }
+                lines.push(Line::from(spans));
+                byte_offset += line.len() + 1;
+            }
+            if app.input.ends_with('\n') {
+                lines.push(Line::from(Span::raw("  ")));
             }
         } else {
             let offset = if app.attachments.is_empty() { 0 } else { 1 };
@@ -918,11 +979,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     line_spans.extend(context_indicator);
     line_spans.push(Span::styled(hint.to_string(), app.theme.dim));
 
-    let status_bg = Style::default().bg(app.theme.code_bg);
-    frame.render_widget(
-        Paragraph::new(Line::from(line_spans)).style(status_bg),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(line_spans)), area);
 }
 
 pub fn format_elapsed(secs: f64) -> String {
