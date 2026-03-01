@@ -402,10 +402,13 @@ impl Agent {
         self.emit_compact_hooks(&Event::AfterCompact);
         Ok(())
     }
-    /// Remove orphaned tool-call cycles from the end of the conversation.
-    /// This happens when a previous stream was cancelled or errored mid-execution,
-    /// leaving ToolResult messages without a subsequent assistant response, or
-    /// assistant ToolUse messages without corresponding ToolResult messages.
+    /// Remove orphaned tool-call cycles and trailing user messages from the
+    /// end of the conversation. This handles cases where a previous stream was
+    /// cancelled or errored mid-execution, leaving ToolResult messages without
+    /// a subsequent assistant response, assistant ToolUse messages without
+    /// corresponding ToolResult messages, or plain user messages that never
+    /// received a response (which would cause consecutive user messages on the
+    /// next send).
     fn sanitize(&mut self) {
         loop {
             let dominated = match self.messages.last() {
@@ -428,6 +431,12 @@ impl Agent {
             } else {
                 break;
             }
+        }
+        // Drop any trailing user message to prevent consecutive user messages.
+        // This happens when a previous send_message was cancelled after pushing
+        // the user message but before the assistant could respond.
+        if matches!(self.messages.last(), Some(msg) if msg.role == Role::User) {
+            self.messages.pop();
         }
     }
 

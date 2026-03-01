@@ -59,20 +59,28 @@ fn convert_content_block(block: &ContentBlock) -> serde_json::Value {
 }
 
 pub(super) fn convert_messages(messages: &[Message]) -> Vec<serde_json::Value> {
-    messages
-        .iter()
-        .filter(|m| m.role != Role::System)
-        .map(|m| {
-            let role = match m.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => "user",
-            };
-            let content: Vec<serde_json::Value> =
-                m.content.iter().map(convert_content_block).collect();
-            serde_json::json!({ "role": role, "content": content })
-        })
-        .collect()
+    let filtered: Vec<&Message> = messages.iter().filter(|m| m.role != Role::System).collect();
+    let mut result: Vec<serde_json::Value> = Vec::new();
+    for m in filtered {
+        let role = match m.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::System => "user",
+        };
+        let blocks: Vec<serde_json::Value> = m.content.iter().map(convert_content_block).collect();
+        // Merge consecutive same-role messages to maintain valid alternation.
+        // This guards against edge cases from cancelled streams or compaction.
+        if let Some(prev) = result.last_mut() {
+            if prev["role"].as_str() == Some(role) {
+                if let Some(arr) = prev["content"].as_array_mut() {
+                    arr.extend(blocks);
+                    continue;
+                }
+            }
+        }
+        result.push(serde_json::json!({ "role": role, "content": blocks }));
+    }
+    result
 }
 
 pub(super) fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
