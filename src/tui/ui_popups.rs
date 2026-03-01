@@ -225,7 +225,7 @@ pub fn draw_command_palette(frame: &mut Frame, app: &mut App, input_area: Rect) 
         .map(|e| e.name.len() + e.description.len() + e.shortcut.len() + 12)
         .max()
         .unwrap_or(20) as u16;
-    let content_height = items.len() as u16;
+    let content_height = (items.len() as u16).min(8);
 
     let box_width = (content_width + 2).min(input_area.width.saturating_sub(2));
     let box_height = content_height + 2;

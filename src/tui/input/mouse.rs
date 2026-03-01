@@ -48,6 +48,20 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                 app.model_selector.up();
                 return InputAction::None;
             }
+            if app.command_palette.visible
+                && let Some(popup) = app.layout.command_palette
+                && rect_contains(popup, col, row)
+            {
+                app.command_palette.up();
+                return InputAction::None;
+            }
+            if app.file_picker.visible
+                && let Some(popup) = app.layout.file_picker
+                && rect_contains(popup, col, row)
+            {
+                app.file_picker.up();
+                return InputAction::None;
+            }
             InputAction::ScrollUp(3)
         }
         MouseEventKind::ScrollDown => {
@@ -57,6 +71,20 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                 && rect_contains(popup, col, row)
             {
                 app.model_selector.down();
+                return InputAction::None;
+            }
+            if app.command_palette.visible
+                && let Some(popup) = app.layout.command_palette
+                && rect_contains(popup, col, row)
+            {
+                app.command_palette.down();
+                return InputAction::None;
+            }
+            if app.file_picker.visible
+                && let Some(popup) = app.layout.file_picker
+                && rect_contains(popup, col, row)
+            {
+                app.file_picker.down();
                 return InputAction::None;
             }
             InputAction::ScrollDown(3)
