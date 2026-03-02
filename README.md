@@ -5,12 +5,16 @@
     <br/>
 </div>
 
-A terminal-native AI coding agent with tool execution, MCP support, extensible hooks, and persistent conversations. Built in Rust with a TUI interface designed to stay out of your way.
+A terminal-native AI coding agent with tool execution, memory, subagents, MCP support, extensible hooks, and persistent conversations. Built in Rust with a TUI interface designed to stay out of your way.
 
 ## Features
 
-- **Multi-Provider**: Supports Anthropic Claude, OpenAI, and any OpenAI-compatible endpoint
-- **Tool Execution**: Built-in file operations, shell commands, and pattern search
+- **Multi-Provider**: Supports Anthropic Claude (with OAuth), OpenAI, and any OpenAI-compatible endpoint
+- **Tool Execution**: Built-in file operations, shell commands, pattern search, glob, grep, web fetch, and patch
+- **Batch & MultiEdit**: Parallel tool execution and multi-edit within a single file
+- **Subagents**: Delegate tasks to focused subagents (blocking or background) with optional profiles and tool filters
+- **Memory**: Long-term memory across conversations with core blocks, archival search (FTS5), and automatic LLM extraction
+- **Snapshot & Revert**: Tracks file changes for per-message revert, checkpoints, and full restore
 - **Custom Tools**: Define shell-backed tools in config.toml
 - **MCP Integration**: Connect any Model Context Protocol server for extensible tooling
 - **Lifecycle Hooks**: 22 events with blocking/modifying support via shell commands
@@ -20,7 +24,12 @@ A terminal-native AI coding agent with tool execution, MCP support, extensible h
 - **Agent Profiles**: Define custom agents with specific models, prompts, and tool sets
 - **Skills System**: Discovers and loads skill definitions from configurable directories
 - **Context-Aware**: Auto-loads project-level and global `AGENTS.md` instructions
+- **Thinking Levels**: Configurable thinking budget (Off / Low / Medium / High)
 - **Vim Keybindings**: Modal editing with full vim-style navigation
+- **Mouse Support**: Click, drag-select, scroll, right-click context menus
+- **Image Attachments**: Paste images directly into the input
+- **File Picker**: Type `@` to browse and attach files
+- **Themes**: Dark, light, terminal, and auto theme detection
 
 ## Install
 
@@ -58,6 +67,7 @@ dot -s <session-id>
 
 # Show config paths and current settings
 dot config
+
 # List MCP servers and discovered tools
 dot mcp
 
@@ -69,8 +79,21 @@ dot install https://github.com/user/my-dot-extension.git
 
 # Uninstall an extension
 dot uninstall my-dot-extension
+```
 
-Inside the TUI: `i` to enter insert mode, `Enter` to send, `Esc` to return to normal mode, `Ctrl+C` to cancel a stream or quit.
+### Keyboard Shortcuts
+
+**Normal mode**:
+`i` insert mode, `j/k` scroll, `g/G` top/bottom, `Ctrl+D/U` half-page, `t` toggle thinking, `Tab` cycle agent, `q` quit, `Ctrl+R` rename session
+
+**Insert mode**:
+`Enter` send, `Ctrl+J` newline, `Ctrl+E` open external editor, `Ctrl+T` cycle thinking, `Ctrl+W` delete word, `Esc` normal mode
+
+**Global**:
+`Ctrl+C` cancel stream / clear input / quit, `/` command palette, `@` file picker
+
+**Mouse**:
+Left-click to interact, drag to select text, right-click for context menu, scroll wheel to navigate
 
 ## Configuration
 
@@ -81,14 +104,25 @@ default_provider = "anthropic"
 default_model = "claude-sonnet-4-20250514"
 
 [theme]
-name = "dark"
+name = "dark"   # dark | light | terminal | auto
 
 [tui]
 vim_mode = true
+favorite_models = ["claude-sonnet-4-20250514", "gpt-4o"]
 
 [context]
 auto_load_global = true
 auto_load_project = true
+
+[subagents]
+enabled = true
+max_turns = 20
+
+[memory]
+enabled = true
+auto_extract = true
+inject_count = 15
+max_memories = 2000
 ```
 
 ### MCP Servers
@@ -144,6 +178,8 @@ command = "scripts/review.sh"
 timeout = 30
 ```
 
+Built-in commands: `/model`, `/agent`, `/clear`, `/help`, `/thinking`, `/sessions`, `/new`, `/rename`, `/export`
+
 ### Lifecycle Hooks
 
 ```toml
@@ -184,20 +220,68 @@ command = "scripts/notify.sh"
 
 ```
 src/
-  main.rs          CLI entry point and provider/tool wiring
-  config.rs        TOML configuration loading
-  extension.rs     Extension trait, hooks, lifecycle events, script tools
-  command.rs       Slash command registry
-  packages.rs      Extension package discovery, install, uninstall
-  context.rs       AGENTS.md discovery and injection
-  mcp.rs           MCP client (stdio transport, JSON-RPC)
-  skills.rs        Skill discovery and loading
-  agent/           Conversation loop, profiles, event types, hook integration
-  provider/        Provider trait + Anthropic and OpenAI implementations
-  tools/           Tool trait, file operations, shell execution
-  tui/             Ratatui-based interface, input handling, markdown rendering
-  auth/            OAuth and API key credential management
-  db/              SQLite session and message persistence
+  main.rs              CLI entry point and provider/tool wiring
+  cli.rs               Clap argument parsing
+  config.rs            TOML configuration loading (~/.config/dot/config.toml)
+  context.rs           AGENTS.md discovery and system prompt injection
+  extension.rs         Extension trait, hooks, lifecycle events, script tools
+  command.rs           Slash command registry
+  packages.rs          Extension package discovery, install, uninstall
+  mcp.rs               MCP client (stdio transport, JSON-RPC)
+  skills.rs            Skill discovery and loading
+  snapshot.rs          File change tracking and revert
+  agent/
+    mod.rs             Conversation loop and tool dispatch
+    events.rs          Agent event types (stream, tool, subagent)
+    profile.rs         Agent profile definitions
+    subagent.rs        Blocking and background subagent delegation
+  memory/
+    mod.rs             MemoryStore: core blocks, archival memory, FTS5 search
+    extract.rs         LLM-based memory extraction from conversations
+    tools.rs           Memory tools (search, add, update, delete, list)
+  provider/
+    mod.rs             Provider trait
+    openai.rs          OpenAI and compatible implementations
+    anthropic/
+      mod.rs           Anthropic Claude (API key + OAuth, thinking, compaction)
+      auth.rs          OAuth and token refresh
+      stream.rs        SSE stream parsing
+      types.rs         Request/response types
+  tools/
+    mod.rs             Tool trait and registry
+    file.rs            File read/write
+    shell.rs           Shell command execution
+    patch.rs           Apply patch / diff
+    glob.rs            Glob pattern matching
+    grep.rs            Regex search
+    web.rs             Web fetch
+    batch.rs           Parallel tool execution
+    multiedit.rs       Multiple edits in a single file
+  tui/
+    mod.rs             TUI run loop and event handling
+    app.rs             Application state
+    ui.rs              Main layout and message rendering
+    ui_popups.rs       Popup rendering (model, agent, session, help, etc.)
+    ui_tools.rs        Tool call rendering with syntax highlighting
+    tools.rs           Tool categories and display extraction
+    widgets.rs         Selector widgets and command palette
+    markdown.rs        Markdown to styled spans
+    theme.rs           Color themes (dark, light, terminal, auto)
+    actions.rs         Input action definitions and dispatch
+    event.rs           Terminal event stream
+    input/
+      mod.rs           Input handling entry point
+      modes.rs         Normal and insert mode keybindings
+      mouse.rs         Mouse click, drag, scroll, context menu
+      popups.rs        Popup-specific input handling
+  auth/
+    mod.rs             Credential management
+    login.rs           Login flow
+    oauth.rs           OAuth helpers
+    ui.rs              Auth UI
+  db/
+    mod.rs             SQLite session and message persistence
+    schema.rs          Database schema (conversations, messages, tool_calls, memories)
 ```
 
 ## Development
