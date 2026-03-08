@@ -58,6 +58,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content, content='memories', content_rowid='rowid'
 )";
 
+pub const CREATE_TASKS: &str = "
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    session_id TEXT,
+    pid INTEGER,
+    output TEXT,
+    cwd TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+)";
+
 pub const CREATE_MEMORIES_TRIGGERS: &str = "
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
     INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);

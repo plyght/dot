@@ -35,12 +35,14 @@ pub struct HeadlessOptions {
     pub no_tools: bool,
     pub resume_id: Option<String>,
     pub interactive: bool,
+    pub task_id: Option<String>,
 }
 
 struct TurnResult {
     text: String,
     tool_calls: Vec<serde_json::Value>,
     session_id: String,
+    error: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -94,7 +96,25 @@ pub async fn run(
     // Single-turn: send the prompt and exit
     if !opts.interactive {
         let result = run_turn(&mut agent, &opts.prompt, &opts, bg_rx).await?;
+        let success = result.error.is_none();
         emit_turn_end(&result, &opts);
+
+        if let Some(ref task_id) = opts.task_id {
+            let db = crate::db::Db::open().ok();
+            if let Some(db) = db {
+                let status = if success { "completed" } else { "failed" };
+                let output = if let Some(ref e) = result.error {
+                    e.clone()
+                } else {
+                    result.text.clone()
+                };
+                let _ = db.complete_task(task_id, status, Some(&result.session_id), &output);
+            }
+        }
+
+        if !success {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
@@ -177,6 +197,7 @@ async fn run_turn(
 
     let mut text = String::new();
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut error: Option<String> = None;
 
     tokio::pin!(future);
 
@@ -184,7 +205,9 @@ async fn run_turn(
         tokio::select! {
             biased;
             result = &mut future => {
-                result.context("agent send_message failed")?;
+                if let Err(e) = result {
+                    error = Some(e.to_string());
+                }
                 // Drain remaining
                 while let Ok(ev) = rx.try_recv() {
                     handle_event(&ev, opts, &mut text, &mut tool_calls);
@@ -207,6 +230,7 @@ async fn run_turn(
         text,
         tool_calls,
         session_id,
+        error,
     })
 }
 
@@ -223,6 +247,7 @@ async fn run_turn_multi(
 
     let mut text = String::new();
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut error: Option<String> = None;
 
     tokio::pin!(future);
 
@@ -230,7 +255,9 @@ async fn run_turn_multi(
         tokio::select! {
             biased;
             result = &mut future => {
-                result.context("agent send_message failed")?;
+                if let Err(e) = result {
+                    error = Some(e.to_string());
+                }
                 while let Ok(ev) = rx.try_recv() {
                     handle_event(&ev, opts, &mut text, &mut tool_calls);
                 }
@@ -252,30 +279,41 @@ async fn run_turn_multi(
         text,
         tool_calls,
         session_id,
+        error,
     };
     Ok((result, bg_rx))
 }
 
 fn emit_turn_end(result: &TurnResult, opts: &HeadlessOptions) {
+    let success = result.error.is_none();
     if opts.format == OutputFormat::Json {
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
+            "success": success,
             "session_id": result.session_id,
             "text": result.text,
             "tool_calls": result.tool_calls,
         });
+        if let Some(ref e) = result.error {
+            output["error"] = serde_json::json!(e);
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&output).unwrap_or_default()
         );
     } else if opts.format == OutputFormat::StreamJson {
-        let obj = serde_json::json!({
+        let mut obj = serde_json::json!({
             "type": "turn_complete",
+            "success": success,
             "session_id": result.session_id,
             "text": result.text,
         });
+        if let Some(ref e) = result.error {
+            obj["error"] = serde_json::json!(e);
+        }
         println!("{obj}");
+    } else if let Some(ref e) = result.error {
+        eprintln!("[error] {e}");
     }
-    // Text mode: final text already printed via TextComplete handler
 }
 
 fn handle_event(

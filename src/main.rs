@@ -15,6 +15,12 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = dot::cli::Cli::parse();
+
+    if cli.print_version {
+        println!("dot {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     match cli.command {
         Some(dot::cli::Commands::Login) => {
             dot::config::Config::ensure_dirs()?;
@@ -116,47 +122,113 @@ async fn main() -> Result<()> {
             }
         },
         Some(dot::cli::Commands::Run {
-            prompt,
+            prompt: args,
             output,
             no_tools,
             session,
             interactive,
         }) => {
             dot::config::Config::ensure_dirs()?;
-            let prompt = match prompt {
-                Some(p) => p,
-                None if !interactive => {
-                    use std::io::Read;
-                    let mut buf = String::new();
-                    std::io::stdin()
-                        .read_to_string(&mut buf)
-                        .context("reading prompt from stdin")?;
-                    let trimmed = buf.trim().to_string();
-                    if trimmed.is_empty() {
-                        bail!("No prompt provided. Pass a prompt argument or pipe via stdin.");
-                    }
-                    trimmed
+            let background = args.first().map(|s| s.as_str()) == Some("bg");
+            let raw_args = if background { &args[1..] } else { &args[..] };
+            let prompt = if !raw_args.is_empty() {
+                raw_args.join(" ")
+            } else if !interactive {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut buf)
+                    .context("reading prompt from stdin")?;
+                let trimmed = buf.trim().to_string();
+                if trimmed.is_empty() {
+                    bail!("No prompt provided. Pass a prompt argument or pipe via stdin.");
                 }
-                None => String::new(),
+                trimmed
+            } else {
+                String::new()
             };
-            run_headless(prompt, output, no_tools, session, interactive).await?;
+
+            if background {
+                run_background_task(&prompt).await?;
+            } else {
+                let task_id = std::env::var("DOT_TASK_ID").ok();
+                run_headless(prompt, output, no_tools, session, interactive, task_id).await?;
+            }
+        }
+        Some(dot::cli::Commands::Tasks) => {
+            dot::config::Config::ensure_dirs()?;
+            let db = dot::db::Db::open().context("opening database")?;
+            let tasks = db.list_tasks(50)?;
+            if tasks.is_empty() {
+                println!("No background tasks.");
+            } else {
+                for t in &tasks {
+                    let prompt_preview = if t.prompt.len() > 60 {
+                        format!("{}…", &t.prompt[..60])
+                    } else {
+                        t.prompt.clone()
+                    };
+                    let icon = match t.status.as_str() {
+                        "running" => "◑",
+                        "completed" => "●",
+                        "failed" => "✗",
+                        _ => "○",
+                    };
+                    println!("{} {} [{}] {}", icon, &t.id[..8], t.status, prompt_preview);
+                }
+            }
+        }
+        Some(dot::cli::Commands::Task { id }) => {
+            dot::config::Config::ensure_dirs()?;
+            let db = dot::db::Db::open().context("opening database")?;
+            let tasks = db.list_tasks(100)?;
+            let task = tasks
+                .iter()
+                .find(|t| t.id.starts_with(&id))
+                .or_else(|| tasks.iter().find(|t| t.id == id));
+            match task {
+                Some(t) => {
+                    println!("id       {}", t.id);
+                    println!("status   {}", t.status);
+                    println!("prompt   {}", t.prompt);
+                    if let Some(ref sid) = t.session_id {
+                        println!("session  {}", sid);
+                    }
+                    if let Some(ref ts) = t.completed_at {
+                        println!("finished {}", ts);
+                    }
+                    if let Some(ref out) = t.output {
+                        println!("\n{}", out);
+                    }
+                }
+                None => {
+                    eprintln!("Task not found: {}", id);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(dot::cli::Commands::Version) => {
+            println!("dot {}", env!("CARGO_PKG_VERSION"));
+        }
+
+        Some(dot::cli::Commands::Acp { name }) => {
+            dot::config::Config::ensure_dirs()?;
+            let config = dot::config::Config::load()?;
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            run_acp(config, &name, cwd).await?;
         }
         None => {
-            let headless_prompt = cli.prompt.clone();
-            if headless_prompt.is_some() || cli.interactive {
-                let prompt = headless_prompt.unwrap_or_default();
-                run_headless(
-                    prompt,
-                    cli.output.clone(),
-                    cli.no_tools,
-                    cli.session.clone(),
-                    cli.interactive,
-                )
-                .await?;
-            } else {
-                dot::config::Config::ensure_dirs()?;
-                let mut config = dot::config::Config::load()?;
-                dot::packages::merge_into_config(&mut config);
+            dot::config::Config::ensure_dirs()?;
+            let mut config = dot::config::Config::load()?;
+            dot::packages::merge_into_config(&mut config);
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            {
                 let creds = dot::auth::Credentials::load()?;
                 let db = dot::db::Db::open().context("opening database")?;
                 let memory = if config.memory.enabled {
@@ -171,10 +243,6 @@ async fn main() -> Result<()> {
                 let profiles = build_agent_profiles(&config);
                 let hooks = build_hooks(&config);
                 let commands = build_commands(&config);
-                let cwd = std::env::current_dir()
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
                 let resume_id = cli.session.clone();
                 dot::tui::run(
                     config,
@@ -196,12 +264,37 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn run_background_task(prompt: &str) -> Result<()> {
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let exe = std::env::current_exe().context("resolving executable path")?;
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let child = std::process::Command::new(&exe)
+        .args(["run", prompt, "-o", "json"])
+        .env("DOT_TASK_ID", &task_id)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("spawning background task")?;
+
+    let db = dot::db::Db::open().context("opening database")?;
+    db.create_task(&task_id, prompt, child.id(), &cwd)?;
+
+    println!("{}", &task_id[..8]);
+    Ok(())
+}
+
 async fn run_headless(
     prompt: String,
     output: String,
     no_tools: bool,
     session: Option<String>,
     interactive: bool,
+    task_id: Option<String>,
 ) -> Result<()> {
     dot::config::Config::ensure_dirs()?;
     let mut config = dot::config::Config::load()?;
@@ -230,6 +323,7 @@ async fn run_headless(
         no_tools,
         resume_id: session,
         interactive,
+        task_id,
     };
     dot::headless::run(
         config,
@@ -553,4 +647,43 @@ fn build_commands(config: &dot::config::Config) -> dot::command::CommandRegistry
         registry.register(dot::command::SlashCommand::from_config(name, cfg));
     }
     registry
+}
+
+async fn run_acp(config: dot::config::Config, agent_name: &str, cwd: String) -> Result<()> {
+    let agent_config = config
+        .acp_agents
+        .get(agent_name)
+        .with_context(|| format!("ACP agent '{}' not found in config", agent_name))?;
+    if agent_config.command.is_empty() {
+        bail!("ACP agent '{}' has no command configured", agent_name);
+    }
+    let command = &agent_config.command[0];
+    let args: Vec<String> = agent_config.command[1..].to_vec();
+    let env: Vec<(String, String)> = agent_config
+        .env
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    let mut client = dot::acp::AcpClient::start(command, &args, &env)
+        .with_context(|| format!("starting ACP agent '{}'", agent_name))?;
+
+    let init = client.initialize().await.context("ACP initialize")?;
+    tracing::info!("Connected to ACP agent: {:?}", init.agent_info);
+
+    for auth in &init.auth_methods {
+        client
+            .authenticate(&auth.id)
+            .await
+            .with_context(|| format!("ACP authenticate ({})", auth.id))?;
+        tracing::info!("ACP authenticated with method: {}", auth.id);
+    }
+
+    let session = client
+        .new_session(&cwd, vec![])
+        .await
+        .context("ACP new session")?;
+    tracing::info!("ACP session created: {}", session.session_id);
+
+    dot::tui::run_acp(config, client).await
 }

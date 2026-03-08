@@ -11,6 +11,8 @@ pub struct Config {
     #[serde(default)]
     pub context: ContextConfig,
     #[serde(default)]
+    pub acp_agents: HashMap<String, AcpAgentConfig>,
+    #[serde(default)]
     pub mcp: HashMap<String, McpServerConfig>,
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
@@ -51,6 +53,18 @@ impl Default for ContextConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeConfig {
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AcpAgentConfig {
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +223,7 @@ impl Default for Config {
                 name: "terminal".to_string(),
             },
             context: ContextConfig::default(),
+            acp_agents: HashMap::new(),
             mcp: HashMap::new(),
             agents: HashMap::new(),
             tui: TuiConfig::default(),

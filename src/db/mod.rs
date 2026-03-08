@@ -2,7 +2,7 @@ pub(crate) mod schema;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -57,6 +57,19 @@ pub struct DbToolCall {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct TaskRecord {
+    pub id: String,
+    pub prompt: String,
+    pub status: String,
+    pub session_id: Option<String>,
+    pub pid: Option<i64>,
+    pub output: Option<String>,
+    pub cwd: String,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -75,10 +88,11 @@ impl Db {
     pub fn init(&self) -> Result<()> {
         self.conn
             .execute_batch(&format!(
-                "{}\n;\n{}\n;\n{}",
+                "{}\n;\n{}\n;\n{}\n;\n{}",
                 schema::CREATE_CONVERSATIONS,
                 schema::CREATE_MESSAGES,
                 schema::CREATE_TOOL_CALLS,
+                schema::CREATE_TASKS,
             ))
             .context("Failed to initialize database schema")?;
 
@@ -426,5 +440,87 @@ impl Db {
         }
         messages.reverse();
         Ok(messages)
+    }
+
+    pub fn create_task(&self, id: &str, prompt: &str, pid: u32, cwd: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn
+            .execute(
+                "INSERT INTO tasks (id, prompt, status, pid, cwd, created_at) \
+                 VALUES (?1, ?2, 'running', ?3, ?4, ?5)",
+                params![id, prompt, pid as i64, cwd, now],
+            )
+            .context("creating task")?;
+        Ok(())
+    }
+
+    pub fn complete_task(
+        &self,
+        id: &str,
+        status: &str,
+        session_id: Option<&str>,
+        output: &str,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn
+            .execute(
+                "UPDATE tasks SET status = ?1, session_id = ?2, output = ?3, completed_at = ?4 WHERE id = ?5",
+                params![status, session_id, output, now, id],
+            )
+            .context("completing task")?;
+        Ok(())
+    }
+
+    pub fn list_tasks(&self, limit: usize) -> Result<Vec<TaskRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, prompt, status, session_id, pid, output, cwd, created_at, completed_at \
+                 FROM tasks ORDER BY created_at DESC LIMIT ?1",
+            )
+            .context("preparing list_tasks")?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(TaskRecord {
+                    id: row.get(0)?,
+                    prompt: row.get(1)?,
+                    status: row.get(2)?,
+                    session_id: row.get(3)?,
+                    pid: row.get(4)?,
+                    output: row.get(5)?,
+                    cwd: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                    created_at: row.get(7)?,
+                    completed_at: row.get(8)?,
+                })
+            })
+            .context("listing tasks")?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(row.context("reading task row")?);
+        }
+        Ok(tasks)
+    }
+
+    pub fn get_task(&self, id: &str) -> Result<TaskRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, prompt, status, session_id, pid, output, cwd, created_at, completed_at \
+                 FROM tasks WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(TaskRecord {
+                        id: row.get(0)?,
+                        prompt: row.get(1)?,
+                        status: row.get(2)?,
+                        session_id: row.get(3)?,
+                        pid: row.get(4)?,
+                        output: row.get(5)?,
+                        cwd: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                        created_at: row.get(7)?,
+                        completed_at: row.get(8)?,
+                    })
+                },
+            )
+            .context("getting task")
     }
 }

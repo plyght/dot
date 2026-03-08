@@ -8,6 +8,429 @@ use crate::tui::input::InputAction;
 use crate::tui::tools::StreamSegment;
 use crate::tui::widgets::{AgentEntry, SessionEntry, time_ago};
 
+pub async fn dispatch_acp_action(
+    app: &mut App,
+    acp: &Arc<Mutex<crate::acp::AcpClient>>,
+    action: InputAction,
+    agent_rx: &mut Option<mpsc::UnboundedReceiver<crate::agent::AgentEvent>>,
+    agent_task: &mut Option<tokio::task::JoinHandle<()>>,
+) -> LoopSignal {
+    match action {
+        InputAction::Quit => return LoopSignal::Quit,
+        InputAction::CancelStream => {
+            if let Some(handle) = agent_task.take() {
+                handle.abort();
+            }
+            *agent_rx = None;
+            let acp_clone = Arc::clone(acp);
+            tokio::spawn(async move {
+                let mut c = acp_clone.lock().await;
+                let _ = c.cancel().await;
+            });
+            app.is_streaming = false;
+            app.streaming_started = None;
+            if !app.current_response.is_empty()
+                || !app.current_tool_calls.is_empty()
+                || !app.streaming_segments.is_empty()
+            {
+                if !app.current_response.is_empty() {
+                    app.streaming_segments
+                        .push(StreamSegment::Text(std::mem::take(
+                            &mut app.current_response,
+                        )));
+                }
+                let content: String = app
+                    .streaming_segments
+                    .iter()
+                    .filter_map(|s| {
+                        if let StreamSegment::Text(t) = s {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let thinking = if app.current_thinking.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(&mut app.current_thinking))
+                };
+                app.messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content,
+                    tool_calls: std::mem::take(&mut app.current_tool_calls),
+                    thinking,
+                    model: Some(app.model_name.clone()),
+                    segments: Some(std::mem::take(&mut app.streaming_segments)),
+                });
+            } else {
+                app.current_response.clear();
+                app.current_thinking.clear();
+                app.current_tool_calls.clear();
+                app.streaming_segments.clear();
+            }
+            app.pending_tool_name = None;
+            app.pending_question = None;
+            app.pending_permission = None;
+            app.status_message = Some(app::StatusMessage::info("cancelled"));
+            return LoopSignal::CancelStream;
+        }
+        InputAction::SendMessage(msg) => {
+            let (tx, rx) = mpsc::unbounded_channel();
+            *agent_rx = Some(rx);
+            let acp_clone = Arc::clone(acp);
+            *agent_task = Some(tokio::spawn(async move {
+                let mut client = acp_clone.lock().await;
+                if let Err(e) = client.send_prompt(&msg).await {
+                    let _ = tx.send(crate::agent::AgentEvent::Error(format!("{e}")));
+                    return;
+                }
+                drop(client);
+                loop {
+                    let mut client = acp_clone.lock().await;
+                    match client.read_next().await {
+                        Ok(acp_msg) => {
+                            drop(client);
+                            match acp_msg {
+                                crate::acp::AcpMessage::Notification(n) => {
+                                    use crate::acp::types::SessionUpdate;
+                                    match n.update {
+                                        SessionUpdate::AgentMessageChunk { content } => {
+                                            if let crate::acp::ContentBlock::Text { text } = content {
+                                                let _ = tx.send(crate::agent::AgentEvent::TextDelta(text));
+                                            }
+                                        }
+                                        SessionUpdate::ThoughtChunk { content } => {
+                                            if let crate::acp::ContentBlock::Text { text } = content {
+                                                let _ = tx.send(crate::agent::AgentEvent::ThinkingDelta(text));
+                                            }
+                                        }
+                                                SessionUpdate::ToolCall { tool_call_id, title, status, content, raw_input, .. } => {
+                                                            let _ = tx.send(crate::agent::AgentEvent::ToolCallStart {
+                                                                id: tool_call_id.clone(),
+                                                                name: title.clone(),
+                                                            });
+                                                            if status == crate::acp::ToolCallStatus::InProgress {
+                                                                let input = raw_input
+                                                                    .as_ref()
+                                                                    .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                                                                    .unwrap_or_default();
+                                                                let _ = tx.send(crate::agent::AgentEvent::ToolCallExecuting {
+                                                                    id: tool_call_id.clone(),
+                                                                    name: title.clone(),
+                                                                    input,
+                                                                });
+                                                            }
+                                                            if status == crate::acp::ToolCallStatus::Completed
+                                                                || status == crate::acp::ToolCallStatus::Failed
+                                                            {
+                                                let output = content.as_ref().map(|c| {
+                                                    c.iter().filter_map(|tc| {
+                                                        if let crate::acp::ToolCallContent::Content { content } = tc {
+                                                            if let crate::acp::ContentBlock::Text { text } = content {
+                                                                return Some(text.clone());
+                                                            }
+                                                        }
+                                                        None
+                                                    }).collect::<Vec<_>>().join("\n")
+                                                }).unwrap_or_default();
+                                                let _ = tx.send(crate::agent::AgentEvent::ToolCallResult {
+                                                    id: tool_call_id,
+                                                    name: title,
+                                                    output,
+                                                    is_error: status == crate::acp::ToolCallStatus::Failed,
+                                                });
+                                            }
+                                        }
+                                        SessionUpdate::ToolCallUpdate { tool_call_id, title, status, content, .. } => {
+                                            if let Some(s) = status {
+                                                if s == crate::acp::ToolCallStatus::Completed
+                                                    || s == crate::acp::ToolCallStatus::Failed
+                                                {
+                                                    let output = content.as_ref().map(|c| {
+                                                        c.iter().filter_map(|tc| {
+                                                            if let crate::acp::ToolCallContent::Content { content } = tc {
+                                                                if let crate::acp::ContentBlock::Text { text } = content {
+                                                                    return Some(text.clone());
+                                                                }
+                                                            }
+                                                            None
+                                                        }).collect::<Vec<_>>().join("\n")
+                                                    }).unwrap_or_default();
+                                                    let _ = tx.send(crate::agent::AgentEvent::ToolCallResult {
+                                                        id: tool_call_id,
+                                                        name: title.unwrap_or_default(),
+                                                        output,
+                                                        is_error: s == crate::acp::ToolCallStatus::Failed,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                                        SessionUpdate::Plan { entries } => {
+                                                            let todos: Vec<crate::agent::TodoItem> = entries.iter().map(|e| {
+                                                                crate::agent::TodoItem {
+                                                                    content: e.content.clone(),
+                                                                    status: match e.status {
+                                                                        crate::acp::PlanEntryStatus::Pending => crate::agent::TodoStatus::Pending,
+                                                                        crate::acp::PlanEntryStatus::InProgress => crate::agent::TodoStatus::InProgress,
+                                                                        crate::acp::PlanEntryStatus::Completed => crate::agent::TodoStatus::Completed,
+                                                                    },
+                                                                }
+                                                            }).collect();
+                                                            let _ = tx.send(crate::agent::AgentEvent::TodoUpdate(todos));
+                                                        }
+                                                        SessionUpdate::CurrentModeUpdate { mode_id } => {
+                                                            let mut c = acp_clone.lock().await;
+                                                            c.set_current_mode(&mode_id);
+                                                        }
+                                                        SessionUpdate::ConfigOptionsUpdate { config_options } => {
+                                                            let mut c = acp_clone.lock().await;
+                                                            c.set_config_options(config_options);
+                                                        }
+                                                        _ => {}
+                                    }
+                                }
+                                crate::acp::AcpMessage::PromptComplete(_) => {
+                                    let _ = tx.send(crate::agent::AgentEvent::TextComplete(String::new()));
+                                    let _ = tx.send(crate::agent::AgentEvent::Done {
+                                        usage: crate::provider::Usage::default(),
+                                    });
+                                    break;
+                                }
+                                crate::acp::AcpMessage::IncomingRequest { id, method, params } => {
+                                    let mut client = acp_clone.lock().await;
+                                    if handle_acp_extension_method(&tx, &method, &params) {
+                                        let _ = client.respond(id, serde_json::json!({})).await;
+                                    } else {
+                                        handle_acp_incoming_request(&mut client, id, &method, params).await;
+                                    }
+                                }
+                                crate::acp::AcpMessage::Response { .. } => {}
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(crate::agent::AgentEvent::Error(format!("{e}")));
+                            break;
+                        }
+                    }
+                }
+            }));
+        }
+        InputAction::OpenExternalEditor => return LoopSignal::OpenEditor,
+        InputAction::ScrollUp(n) => app.scroll_up(n),
+        InputAction::ScrollDown(n) => app.scroll_down(n),
+        InputAction::ScrollToTop => app.scroll_to_top(),
+        InputAction::ScrollToBottom => app.scroll_to_bottom(),
+        InputAction::ClearConversation => app.clear_conversation(),
+        InputAction::ToggleThinking => {
+            app.thinking_expanded = !app.thinking_expanded;
+            app.mark_dirty();
+        }
+        InputAction::CopyMessage(idx) => {
+            if idx < app.messages.len() {
+                app::copy_to_clipboard(&app.messages[idx].content);
+                app.status_message = Some(app::StatusMessage::info("copied to clipboard"));
+            }
+        }
+        InputAction::OpenRenamePopup => {
+            app.rename_input = app.conversation_title.clone().unwrap_or_default();
+            app.rename_visible = true;
+        }
+        InputAction::OpenAgentSelector => {
+            let acp_lock = acp.lock().await;
+            let modes = acp_lock.available_modes();
+            let current = acp_lock.current_mode().unwrap_or("").to_string();
+            let entries: Vec<AgentEntry> = modes
+                .iter()
+                .map(|m| AgentEntry {
+                    name: m.id.clone(),
+                    description: m.description.clone().unwrap_or_else(|| m.name.clone()),
+                })
+                .collect();
+            drop(acp_lock);
+            if entries.is_empty() {
+                app.status_message =
+                    Some(app::StatusMessage::info("no modes available"));
+            } else {
+                app.agent_selector.open(entries, &current);
+            }
+        }
+        InputAction::SelectAgent { name } => {
+            let acp_clone = Arc::clone(acp);
+            let mode_id = name.clone();
+            tokio::spawn(async move {
+                let mut c = acp_clone.lock().await;
+                let _ = c.set_mode(&mode_id).await;
+            });
+            app.model_name = name.clone();
+            app.mark_dirty();
+        }
+        InputAction::ToggleAgent => {
+            let mut acp_lock = acp.lock().await;
+            let modes = acp_lock.available_modes().to_vec();
+            let current = acp_lock.current_mode().unwrap_or("").to_string();
+            if !modes.is_empty() {
+                let idx = modes.iter().position(|m| m.id == current).unwrap_or(0);
+                let next = &modes[(idx + 1) % modes.len()];
+                let next_id = next.id.clone();
+                let _ = acp_lock.set_mode(&next_id).await;
+                acp_lock.set_current_mode(&next_id);
+                drop(acp_lock);
+                app.model_name = next_id;
+                app.mark_dirty();
+            }
+        }
+        InputAction::NewConversation
+        | InputAction::OpenModelSelector
+        | InputAction::OpenSessionSelector
+        | InputAction::ResumeSession { .. }
+        | InputAction::SelectModel { .. }
+        | InputAction::OpenThinkingSelector
+        | InputAction::SetThinkingLevel(_)
+        | InputAction::CycleThinkingLevel
+        | InputAction::TruncateToMessage(_)
+        | InputAction::RevertToMessage(_)
+        | InputAction::ForkFromMessage(_)
+        | InputAction::AnswerQuestion(_)
+        | InputAction::LoadSkill { .. }
+        | InputAction::RunCustomCommand { .. }
+        | InputAction::ExportSession(_)
+        | InputAction::RenameSession(_)
+        | InputAction::AnswerPermission(_)
+        | InputAction::None => {
+            app.status_message = Some(app::StatusMessage::info("not available in ACP mode"));
+        }
+    }
+    LoopSignal::Continue
+}
+
+fn handle_acp_extension_method(
+    tx: &mpsc::UnboundedSender<crate::agent::AgentEvent>,
+    method: &str,
+    params: &serde_json::Value,
+) -> bool {
+    match method {
+        "cursor/update_todos" => {
+            if let Some(items) = params["todos"].as_array() {
+                let todos: Vec<crate::agent::TodoItem> = items
+                    .iter()
+                    .filter_map(|t| {
+                        Some(crate::agent::TodoItem {
+                            content: t["content"].as_str()?.to_string(),
+                            status: match t["status"].as_str().unwrap_or("pending") {
+                                "in_progress" => crate::agent::TodoStatus::InProgress,
+                                "completed" => crate::agent::TodoStatus::Completed,
+                                _ => crate::agent::TodoStatus::Pending,
+                            },
+                        })
+                    })
+                    .collect();
+                let _ = tx.send(crate::agent::AgentEvent::TodoUpdate(todos));
+            }
+            true
+        }
+        "cursor/ask_question" => {
+            let question = params["question"].as_str().unwrap_or("").to_string();
+            let options: Vec<String> = params["options"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let (resp_tx, _) = tokio::sync::oneshot::channel();
+            let _ = tx.send(crate::agent::AgentEvent::Question {
+                id: uuid::Uuid::new_v4().to_string(),
+                question,
+                options,
+                responder: crate::agent::QuestionResponder(resp_tx),
+            });
+            true
+        }
+        "cursor/create_plan" | "cursor/task" | "cursor/generate_image" => true,
+        _ => false,
+    }
+}
+
+async fn handle_acp_incoming_request(
+    client: &mut crate::acp::AcpClient,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+) {
+    match method {
+        "fs/read_text_file" => {
+            let path = params["path"].as_str().unwrap_or("");
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    let _ = client.respond(id, serde_json::json!({"content": content})).await;
+                }
+                Err(e) => {
+                    let _ = client.respond_error(id, -32603, &e.to_string()).await;
+                }
+            }
+        }
+        "fs/write_text_file" => {
+            let path = params["path"].as_str().unwrap_or("");
+            let content = params["content"].as_str().unwrap_or("");
+            match std::fs::write(path, content) {
+                Ok(()) => {
+                    let _ = client.respond(id, serde_json::json!({})).await;
+                }
+                Err(e) => {
+                    let _ = client.respond_error(id, -32603, &e.to_string()).await;
+                }
+            }
+        }
+        "terminal/create" => {
+            let command = params["command"].as_str().unwrap_or("sh");
+            let args: Vec<String> = params["args"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let cwd = params["cwd"].as_str();
+            let mut cmd = tokio::process::Command::new(command);
+            cmd.args(&args);
+            if let Some(d) = cwd {
+                cmd.current_dir(d);
+            }
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            match cmd.spawn() {
+                Ok(_child) => {
+                    let tid = uuid::Uuid::new_v4().to_string();
+                    let _ = client.respond(id, serde_json::json!({"terminalId": tid})).await;
+                }
+                Err(e) => {
+                    let _ = client.respond_error(id, -32603, &e.to_string()).await;
+                }
+            }
+        }
+        "session/request_permission" => {
+            let options = params["options"].as_array();
+            let allow_id = options
+                .and_then(|opts| {
+                    opts.iter().find(|o| {
+                        o["kind"].as_str() == Some("allow_once")
+                            || o["kind"].as_str() == Some("allow-once")
+                    })
+                })
+                .and_then(|o| o["optionId"].as_str())
+                .unwrap_or("allow-once");
+            let _ = client
+                .respond(
+                    id,
+                    serde_json::json!({
+                        "outcome": { "outcome": "selected", "optionId": allow_id }
+                    }),
+                )
+                .await;
+        }
+        _ => {
+            let _ = client
+                .respond_error(id, -32601, &format!("unsupported: {}", method))
+                .await;
+        }
+    }
+}
+
 pub enum LoopSignal {
     Continue,
     Quit,

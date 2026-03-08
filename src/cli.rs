@@ -1,7 +1,12 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "dot", about = "minimal ai agent")]
+#[command(
+    name = "dot",
+    about = "minimal ai agent",
+    version,
+    disable_version_flag = true
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -12,10 +17,6 @@ pub struct Cli {
         help = "resume a previous session by id"
     )]
     pub session: Option<String>,
-
-    /// Run in headless mode with a prompt (no TUI)
-    #[arg(short = 'p', long = "prompt")]
-    pub prompt: Option<String>,
 
     /// Output format for headless mode
     #[arg(short = 'o', long = "output", default_value = "text", value_parser = ["text", "json", "stream-json"])]
@@ -28,6 +29,10 @@ pub struct Cli {
     /// Multi-turn interactive headless mode (read prompts from stdin line by line)
     #[arg(short = 'i', long = "interactive")]
     pub interactive: bool,
+
+    /// Print version
+    #[arg(short = 'v', long = "version")]
+    pub print_version: bool,
 }
 
 #[derive(Subcommand)]
@@ -48,10 +53,15 @@ pub enum Commands {
         /// Name of the extension to remove
         name: String,
     },
-    /// Run headless with a prompt (alternative to -p)
+    /// Connect to an ACP agent
+    Acp {
+        /// Agent name (configured in config.toml)
+        name: String,
+    },
+    /// Run in headless mode (no TUI). Use "bg" as first arg for background mode.
     Run {
-        /// The prompt to send (omit to read from stdin)
-        prompt: Option<String>,
+        /// The prompt to send (prefix with "bg" for background mode, omit to read from stdin)
+        prompt: Vec<String>,
 
         /// Output format: text, json, stream-json
         #[arg(short = 'o', long = "output", default_value = "text")]
@@ -69,4 +79,13 @@ pub enum Commands {
         #[arg(short = 'i', long = "interactive")]
         interactive: bool,
     },
+    /// List background tasks
+    Tasks,
+    /// View a background task's status and output
+    Task {
+        /// Task ID to view
+        id: String,
+    },
+    /// Show version information
+    Version,
 }

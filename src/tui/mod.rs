@@ -377,3 +377,153 @@ async fn handle_event(
     };
     actions::dispatch_action(app, agent, action, agent_rx, agent_task).await
 }
+
+pub async fn run_acp(config: crate::config::Config, client: crate::acp::AcpClient) -> Result<()> {
+    terminal::enable_raw_mode()?;
+    let mut stdout = std::io::stderr();
+    execute!(
+        stdout,
+        terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste
+    )?;
+    let backend = ratatui::backend::CrosstermBackend::new(stdout);
+    let mut terminal = ratatui::Terminal::new(backend)?;
+
+    let agent_name = client
+        .agent_info()
+        .map(|i| i.name.clone())
+        .unwrap_or_else(|| "acp".into());
+    let model_name = client
+        .current_mode()
+        .unwrap_or("acp")
+        .to_string();
+    let provider_name = agent_name.clone();
+
+    let mut app = app::App::new(
+        model_name,
+        provider_name,
+        agent_name,
+        &config.theme.name,
+        config.tui.vim_mode,
+    );
+
+    let acp = Arc::new(Mutex::new(client));
+    let mut events = EventHandler::new();
+    let mut agent_rx: Option<mpsc::UnboundedReceiver<crate::agent::AgentEvent>> = None;
+    let mut agent_task: Option<tokio::task::JoinHandle<()>> = None;
+
+    loop {
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+
+        let event = if let Some(ref mut rx) = agent_rx {
+            tokio::select! {
+                biased;
+                agent_event = rx.recv() => {
+                    match agent_event {
+                        Some(ev) => {
+                            app.handle_agent_event(ev);
+                        }
+                        None => {
+                            if app.is_streaming {
+                                app.is_streaming = false;
+                            }
+                            agent_rx = None;
+                        }
+                    }
+                    continue;
+                }
+                ui_event = events.next() => {
+                    match ui_event {
+                        Some(ev) => ev,
+                        None => break,
+                    }
+                }
+            }
+        } else {
+            match events.next().await {
+                Some(ev) => ev,
+                None => break,
+            }
+        };
+
+        match handle_acp_event(&mut app, &acp, event, &mut agent_rx, &mut agent_task).await {
+            actions::LoopSignal::Quit => break,
+            actions::LoopSignal::OpenEditor => {
+                let editor = std::env::var("VISUAL")
+                    .or_else(|_| std::env::var("EDITOR"))
+                    .unwrap_or_else(|_| "vi".to_string());
+                let tmp = std::env::temp_dir().join("dot_input.md");
+                let _ = std::fs::write(&tmp, &app.input);
+                terminal::disable_raw_mode()?;
+                execute!(
+                    std::io::stderr(),
+                    terminal::LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture
+                )?;
+                let status = std::process::Command::new(&editor).arg(&tmp).status();
+                execute!(
+                    std::io::stderr(),
+                    terminal::EnterAlternateScreen,
+                    crossterm::event::EnableMouseCapture
+                )?;
+                terminal::enable_raw_mode()?;
+                terminal.clear()?;
+                if status.is_ok()
+                    && let Ok(contents) = std::fs::read_to_string(&tmp)
+                {
+                    let trimmed = contents.trim_end().to_string();
+                    if !trimmed.is_empty() {
+                        app.cursor_pos = trimmed.len();
+                        app.input = trimmed;
+                    }
+                }
+                let _ = std::fs::remove_file(&tmp);
+            }
+            _ => {}
+        }
+    }
+
+    if let Ok(mut c) = acp.try_lock() {
+        let _ = c.kill();
+    }
+
+    terminal::disable_raw_mode()?;
+    execute!(
+        std::io::stderr(),
+        terminal::LeaveAlternateScreen,
+        crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
+async fn handle_acp_event(
+    app: &mut app::App,
+    acp: &Arc<Mutex<crate::acp::AcpClient>>,
+    event: AppEvent,
+    agent_rx: &mut Option<mpsc::UnboundedReceiver<crate::agent::AgentEvent>>,
+    agent_task: &mut Option<tokio::task::JoinHandle<()>>,
+) -> actions::LoopSignal {
+    let action = match event {
+        AppEvent::Key(key) => input::handle_key(app, key),
+        AppEvent::Mouse(mouse) => input::handle_mouse(app, mouse),
+        AppEvent::Paste(text) => input::handle_paste(app, text),
+        AppEvent::Tick => {
+            app.tick_count = app.tick_count.wrapping_add(1);
+            if app.status_message.as_ref().is_some_and(|s| s.expired()) {
+                app.status_message = None;
+                app.mark_dirty();
+            }
+            return actions::LoopSignal::Continue;
+        }
+        AppEvent::Agent(ev) => {
+            app.handle_agent_event(ev);
+            return actions::LoopSignal::Continue;
+        }
+        AppEvent::Resize(_, _) => return actions::LoopSignal::Continue,
+    };
+    actions::dispatch_acp_action(app, acp, action, agent_rx, agent_task).await
+}
