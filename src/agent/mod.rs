@@ -327,13 +327,13 @@ impl Agent {
         thinking: Option<String>,
     ) -> Result<()> {
         let mut blocks: Vec<ContentBlock> = Vec::new();
-        if let Some(t) = thinking {
-            if !t.is_empty() {
-                blocks.push(ContentBlock::Thinking {
-                    thinking: t,
-                    signature: String::new(),
-                });
-            }
+        if let Some(t) = thinking
+            && !t.is_empty()
+        {
+            blocks.push(ContentBlock::Thinking {
+                thinking: t,
+                signature: String::new(),
+            });
         }
         if !content.is_empty() {
             blocks.push(ContentBlock::Text(content.clone()));

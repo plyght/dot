@@ -1,12 +1,12 @@
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 use crate::tui::app::App;
 use crate::tui::widgets::{
-    LoginPopup, LoginStep, PaletteEntryKind, ThinkingLevel, WelcomeScreen, COMMANDS,
+    COMMANDS, LoginPopup, LoginStep, PaletteEntryKind, ThinkingLevel, WelcomeScreen,
 };
 
 fn popup_block(title: &str, _accent: Color, _muted: Color) -> Block<'static> {
@@ -52,7 +52,8 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
             last_provider = Some(&entry.provider);
         }
 
-        let is_current = entry.provider == sel.current_provider && entry.model == sel.current_model;
+        let _is_current =
+            entry.provider == sel.current_provider && entry.model == sel.current_model;
         let is_sel = item_idx == sel.selected;
 
         let prefix = if is_sel { "\u{203a} " } else { "  " };
@@ -64,8 +65,6 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
 
         let name_style = if is_sel {
             Style::default().add_modifier(Modifier::BOLD)
-        } else if is_current {
-            Style::default()
         } else {
             Style::default()
         };
@@ -137,20 +136,14 @@ pub fn draw_agent_selector(frame: &mut Frame, app: &mut App) {
 
     let mut content_lines: Vec<Line<'static>> = Vec::new();
     for (i, entry) in sel.entries.iter().enumerate() {
-        let is_current = entry.name == sel.current;
+        let _is_current = entry.name == sel.current;
         let is_sel = i == sel.selected;
 
         let prefix = if is_sel { "\u{203a} " } else { "  " };
-        let marker_style = if is_sel {
-            Style::default()
-        } else {
-            Style::default()
-        };
+        let marker_style = Style::default();
 
         let name_style = if is_sel {
             Style::default().add_modifier(Modifier::BOLD)
-        } else if is_current {
-            Style::default()
         } else {
             Style::default()
         };
@@ -337,20 +330,14 @@ pub fn draw_thinking_selector(frame: &mut Frame, app: &mut App) {
     let mut content_lines: Vec<Line<'static>> = Vec::new();
 
     for (i, &level) in levels.iter().enumerate() {
-        let is_current = level == sel.current;
+        let _is_current = level == sel.current;
         let is_sel = i == sel.selected;
 
         let prefix = if is_sel { "\u{203a} " } else { "  " };
-        let marker_style = if is_sel {
-            Style::default()
-        } else {
-            Style::default()
-        };
+        let marker_style = Style::default();
 
         let name_style = if is_sel {
             Style::default().add_modifier(Modifier::BOLD)
-        } else if is_current {
-            Style::default()
         } else {
             Style::default()
         };
@@ -1002,28 +989,21 @@ pub fn draw_welcome_screen(frame: &mut Frame, app: &mut App) {
     let inner_w: usize = 52;
     let sep: String = "\u{2500}".repeat(inner_w);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(""));
-
-    lines.push(
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        Line::from(""),
         Line::from(Span::styled(
             "dot",
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
-    );
-    lines.push(Line::from(Span::styled("minimal ai agent", dim)).alignment(Alignment::Center));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(sep, dim)));
-    lines.push(Line::from(""));
-
-    lines.push(
+        Line::from(Span::styled("minimal ai agent", dim)).alignment(Alignment::Center),
+        Line::from(""),
+        Line::from(Span::styled(sep, dim)),
+        Line::from(""),
         Line::from(Span::styled("get started", Style::default())).alignment(Alignment::Center),
-    );
-    lines.push(Line::from(""));
+        Line::from(""),
+    ];
 
     let choices = WelcomeScreen::choices();
     for (i, (label, desc)) in choices.iter().enumerate() {

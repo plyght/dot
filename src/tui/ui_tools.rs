@@ -578,7 +578,7 @@ pub fn render_streaming_state(
         lines.push(Line::from(tool_spans));
         line_to_tool.push(None);
     } else {
-        let blink_on = (app.tick_count / 30) % 2 == 0;
+        let blink_on = (app.tick_count / 30).is_multiple_of(2);
         let dot_char = if blink_on { "\u{00b7}" } else { " " };
         let mut dot_spans = vec![
             Span::raw(pad.to_string()),

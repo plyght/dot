@@ -40,9 +40,16 @@ pub enum InputAction {
     ToggleAgent,
     OpenThinkingSelector,
     OpenSessionSelector,
-    SelectModel { provider: String, model: String },
-    SelectAgent { name: String },
-    ResumeSession { id: String },
+    SelectModel {
+        provider: String,
+        model: String,
+    },
+    SelectAgent {
+        name: String,
+    },
+    ResumeSession {
+        id: String,
+    },
     SetThinkingLevel(u32),
     ToggleThinking,
     CycleThinkingLevel,
@@ -50,15 +57,28 @@ pub enum InputAction {
     ForkFromMessage(usize),
     RevertToMessage(usize),
     CopyMessage(usize),
-    LoadSkill { name: String },
-    RunCustomCommand { name: String, args: String },
+    LoadSkill {
+        name: String,
+    },
+    RunCustomCommand {
+        name: String,
+        args: String,
+    },
     OpenRenamePopup,
     RenameSession(String),
     ExportSession(Option<String>),
     OpenExternalEditor,
     OpenLoginPopup,
-    LoginSubmitApiKey { provider: String, key: String },
-    LoginOAuth { provider: String, create_key: bool, code: String, verifier: String },
+    LoginSubmitApiKey {
+        provider: String,
+        key: String,
+    },
+    LoginOAuth {
+        provider: String,
+        create_key: bool,
+        code: String,
+        verifier: String,
+    },
 }
 
 enum PasteItem {
@@ -100,11 +120,11 @@ pub fn handle_paste(app: &mut App, text: String) -> InputAction {
 
     let mut items: Vec<PasteItem> = Vec::new();
     for line in &lines {
-        if let Some(path) = crate::tui::app::normalize_paste_path(line) {
-            if path_exists(&path) {
-                items.push(PasteItem::Path(path));
-                continue;
-            }
+        if let Some(path) = crate::tui::app::normalize_paste_path(line)
+            && path_exists(&path)
+        {
+            items.push(PasteItem::Path(path));
+            continue;
         }
         items.push(PasteItem::Plain((*line).to_string()));
     }

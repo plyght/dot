@@ -664,7 +664,7 @@ pub(super) fn handle_welcome_screen(app: &mut App, key: KeyEvent) -> InputAction
                     crate::tui::widgets::WelcomeChoice::Login => {
                         app.login_popup.open();
                         app.login_popup.from_welcome = true;
-                        return InputAction::None;
+                        InputAction::None
                     }
                     crate::tui::widgets::WelcomeChoice::UseEnvKeys => {
                         app.status_message = Some(crate::tui::app::StatusMessage::success(

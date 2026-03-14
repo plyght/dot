@@ -199,19 +199,21 @@ async fn run_app(
     app.favorite_models = config.tui.favorite_models.clone();
     app.skill_entries = skill_names;
 
-    if first_run || resume_id.is_none() && {
-        let creds = crate::auth::Credentials::load().unwrap_or_default();
-        let has_creds = !creds.providers.is_empty();
-        let has_env = std::env::var("ANTHROPIC_API_KEY")
-            .ok()
-            .filter(|k| !k.is_empty())
-            .is_some()
-            || std::env::var("OPENAI_API_KEY")
+    if first_run
+        || resume_id.is_none() && {
+            let creds = crate::auth::Credentials::load().unwrap_or_default();
+            let has_creds = !creds.providers.is_empty();
+            let has_env = std::env::var("ANTHROPIC_API_KEY")
                 .ok()
                 .filter(|k| !k.is_empty())
-                .is_some();
-        !has_creds && !has_env
-    } {
+                .is_some()
+                || std::env::var("OPENAI_API_KEY")
+                    .ok()
+                    .filter(|k| !k.is_empty())
+                    .is_some();
+            !has_creds && !has_env
+        }
+    {
         app.welcome_screen.open();
     }
     {

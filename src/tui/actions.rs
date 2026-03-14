@@ -96,21 +96,18 @@ pub async fn dispatch_acp_action(
                                 crate::acp::AcpMessage::Notification(n) => {
                                     use crate::acp::types::SessionUpdate;
                                     match n.update {
-                                        SessionUpdate::AgentMessageChunk { content } => {
-                                            if let crate::acp::ContentBlock::Text { text } = content
-                                            {
-                                                let _ = tx.send(
-                                                    crate::agent::AgentEvent::TextDelta(text),
-                                                );
-                                            }
+                                        SessionUpdate::AgentMessageChunk {
+                                            content: crate::acp::ContentBlock::Text { text },
+                                        } => {
+                                            let _ =
+                                                tx.send(crate::agent::AgentEvent::TextDelta(text));
                                         }
-                                        SessionUpdate::ThoughtChunk { content } => {
-                                            if let crate::acp::ContentBlock::Text { text } = content
-                                            {
-                                                let _ = tx.send(
-                                                    crate::agent::AgentEvent::ThinkingDelta(text),
-                                                );
-                                            }
+                                        SessionUpdate::ThoughtChunk {
+                                            content: crate::acp::ContentBlock::Text { text },
+                                        } => {
+                                            let _ = tx.send(
+                                                crate::agent::AgentEvent::ThinkingDelta(text),
+                                            );
                                         }
                                         SessionUpdate::ToolCall {
                                             tool_call_id,
@@ -146,10 +143,11 @@ pub async fn dispatch_acp_action(
                                             {
                                                 let output = content.as_ref().map(|c| {
                                                     c.iter().filter_map(|tc| {
-                                                        if let crate::acp::ToolCallContent::Content { content } = tc {
-                                                            if let crate::acp::ContentBlock::Text { text } = content {
-                                                                return Some(text.clone());
-                                                            }
+                                                        if let crate::acp::ToolCallContent::Content {
+                                                            content: crate::acp::ContentBlock::Text { text },
+                                                        } = tc
+                                                        {
+                                                            return Some(text.clone());
                                                         }
                                                         None
                                                     }).collect::<Vec<_>>().join("\n")
@@ -168,33 +166,33 @@ pub async fn dispatch_acp_action(
                                         SessionUpdate::ToolCallUpdate {
                                             tool_call_id,
                                             title,
-                                            status,
+                                            status: Some(s),
                                             content,
                                             ..
-                                        } => {
-                                            if let Some(s) = status {
-                                                if s == crate::acp::ToolCallStatus::Completed
-                                                    || s == crate::acp::ToolCallStatus::Failed
-                                                {
-                                                    let output = content.as_ref().map(|c| {
-                                                        c.iter().filter_map(|tc| {
-                                                            if let crate::acp::ToolCallContent::Content { content } = tc {
-                                                                if let crate::acp::ContentBlock::Text { text } = content {
-                                                                    return Some(text.clone());
-                                                                }
-                                                            }
-                                                            None
-                                                        }).collect::<Vec<_>>().join("\n")
-                                                    }).unwrap_or_default();
-                                                    let _ = tx.send(crate::agent::AgentEvent::ToolCallResult {
-                                                        id: tool_call_id,
-                                                        name: title.unwrap_or_default(),
-                                                        output,
-                                                        is_error: s == crate::acp::ToolCallStatus::Failed,
-                                                    });
-                                                }
-                                            }
+                                        } if s == crate::acp::ToolCallStatus::Completed
+                                            || s == crate::acp::ToolCallStatus::Failed =>
+                                        {
+                                            let output = content.as_ref().map(|c| {
+                                                c.iter().filter_map(|tc| {
+                                                    if let crate::acp::ToolCallContent::Content {
+                                                        content: crate::acp::ContentBlock::Text { text },
+                                                    } = tc
+                                                    {
+                                                        return Some(text.clone());
+                                                    }
+                                                    None
+                                                }).collect::<Vec<_>>().join("\n")
+                                            }).unwrap_or_default();
+                                            let _ =
+                                                tx.send(crate::agent::AgentEvent::ToolCallResult {
+                                                    id: tool_call_id,
+                                                    name: title.unwrap_or_default(),
+                                                    output,
+                                                    is_error: s
+                                                        == crate::acp::ToolCallStatus::Failed,
+                                                });
                                         }
+                                        SessionUpdate::ToolCallUpdate { .. } => {}
                                         SessionUpdate::Plan { entries } => {
                                             let todos: Vec<crate::agent::TodoItem> = entries
                                                 .iter()

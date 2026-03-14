@@ -14,6 +14,9 @@ use crate::tui::widgets::{
     ModelSelector, SessionSelector, ThinkingLevel, ThinkingSelector, WelcomeScreen,
 };
 
+type ModelFetchReceiver =
+    tokio::sync::oneshot::Receiver<(Vec<(String, Vec<String>)>, String, String)>;
+
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -189,14 +192,14 @@ pub fn normalize_paste_path(s: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
-    if let Ok(u) = url::Url::parse(s) {
-        if u.scheme() == "file" {
-            let path = u.path();
-            if path.is_empty() || path == "/" {
-                return None;
-            }
-            return Some(path.to_string());
+    if let Ok(u) = url::Url::parse(s)
+        && u.scheme() == "file"
+    {
+        let path = u.path();
+        if path.is_empty() || path == "/" {
+            return None;
         }
+        return Some(path.to_string());
     }
     if s.starts_with('/') || s.starts_with('~') || s.starts_with("./") {
         return Some(s.to_string());
@@ -360,8 +363,7 @@ pub struct App {
     pub input_at_top: bool,
 
     pub cached_model_groups: Option<Vec<(String, Vec<String>)>>,
-    pub model_fetch_rx:
-        Option<tokio::sync::oneshot::Receiver<(Vec<(String, Vec<String>)>, String, String)>>,
+    pub model_fetch_rx: Option<ModelFetchReceiver>,
 
     pub cursor_shape: CursorShape,
     pub cursor_blink: bool,
@@ -369,6 +371,7 @@ pub struct App {
     pub cursor_blink_normal: Option<bool>,
 }
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_name: String,
         provider_name: String,
@@ -879,7 +882,7 @@ impl App {
                 };
             }
         }
-        (visual as u16).max(1).min(12)
+        (visual as u16).clamp(1, 12)
     }
 
     pub fn handle_paste(&mut self, text: String) {

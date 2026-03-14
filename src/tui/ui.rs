@@ -107,7 +107,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.login_popup.visible {
         ui_popups::draw_login_popup(frame, app);
     }
-
 }
 
 fn draw_status_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -222,7 +221,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             let prefix = format!("{}\u{25c6} ", pad);
             let bar_budget = (inner.width as usize)
                 .saturating_sub(prefix.chars().count() + label.chars().count());
-            let bar_width = bar_budget.min(16).max(4);
+            let bar_width = bar_budget.clamp(4, 16);
             let filled = if total > 0 {
                 (done * bar_width) / total
             } else {
@@ -969,7 +968,7 @@ fn draw_token_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if !app.follow_bottom && app.is_streaming {
-        let new_label = if compact { " \u{2193}" } else { " \u{2193}" };
+        let new_label = " \u{2193}";
         left_spans.push(Span::styled(
             new_label,
             Style::default().fg(app.theme.accent),
