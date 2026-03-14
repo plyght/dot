@@ -270,6 +270,7 @@ async fn main() -> Result<()> {
                     skill_names,
                     hooks,
                     commands,
+                    cli.first_run,
                 )
                 .await?;
             }

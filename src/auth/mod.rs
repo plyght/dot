@@ -1,6 +1,6 @@
 pub mod copilot;
 mod login;
-mod oauth;
+pub mod oauth;
 mod ui;
 
 pub use login::login_flow;

@@ -178,7 +178,7 @@ pub(super) async fn device_flow() -> Result<ProviderCredential> {
     }
 }
 
-pub(super) async fn copilot_login() -> Result<ProviderCredential> {
+pub async fn copilot_login() -> Result<ProviderCredential> {
     let mut stdout = io::stdout();
 
     if let Some(token) = read_existing_token() {

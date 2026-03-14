@@ -341,6 +341,9 @@ pub async fn dispatch_acp_action(
         | InputAction::ExportSession(_)
         | InputAction::RenameSession(_)
         | InputAction::AnswerPermission(_)
+        | InputAction::OpenLoginPopup
+        | InputAction::LoginSubmitApiKey { .. }
+        | InputAction::LoginOAuth { .. }
         | InputAction::None => {
             app.status_message = Some(app::StatusMessage::info("not available in ACP mode"));
         }
@@ -1011,6 +1014,53 @@ pub async fn dispatch_action(
             }
         }
         InputAction::OpenExternalEditor => return LoopSignal::OpenEditor,
+        InputAction::OpenLoginPopup => {
+            app.login_popup.open();
+        }
+        InputAction::LoginSubmitApiKey { provider, key } => {
+            let cred = crate::auth::ProviderCredential::ApiKey { key };
+            match crate::auth::Credentials::load() {
+                Ok(mut creds) => {
+                    creds.set(&provider, cred);
+                    if let Err(e) = creds.save() {
+                        app.status_message =
+                            Some(app::StatusMessage::error(format!("save failed: {e}")));
+                    } else {
+                        app.status_message = Some(app::StatusMessage::success(format!(
+                            "{} credentials saved",
+                            provider
+                        )));
+                    }
+                }
+                Err(e) => {
+                    app.status_message =
+                        Some(app::StatusMessage::error(format!("load creds: {e}")));
+                }
+            }
+        }
+        InputAction::LoginOAuth {
+            provider,
+            create_key,
+            code,
+            verifier,
+        } => {
+            app.status_message = Some(app::StatusMessage::info("exchanging code..."));
+            app.login_popup.close();
+            tokio::spawn(async move {
+                match crate::auth::oauth::exchange_oauth_code(&code, &verifier, create_key).await {
+                    Ok(cred) => {
+                        if let Ok(mut creds) = crate::auth::Credentials::load() {
+                            creds.set(&provider, cred);
+                            let _ = creds.save();
+                        }
+                        tracing::info!("{} OAuth credentials saved", provider);
+                    }
+                    Err(e) => {
+                        tracing::warn!("OAuth exchange failed: {}", e);
+                    }
+                }
+            });
+        }
         InputAction::AnswerPermission(_) | InputAction::None => {}
         InputAction::OpenRenamePopup => {
             app.rename_input = app.conversation_title.clone().unwrap_or_default();

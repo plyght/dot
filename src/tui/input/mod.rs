@@ -56,6 +56,9 @@ pub enum InputAction {
     RenameSession(String),
     ExportSession(Option<String>),
     OpenExternalEditor,
+    OpenLoginPopup,
+    LoginSubmitApiKey { provider: String, key: String },
+    LoginOAuth { provider: String, create_key: bool, code: String, verifier: String },
 }
 
 enum PasteItem {
@@ -64,6 +67,22 @@ enum PasteItem {
 }
 
 pub fn handle_paste(app: &mut App, text: String) -> InputAction {
+    if app.login_popup.visible {
+        let trimmed = text.trim().to_string();
+        if !trimmed.is_empty() {
+            match app.login_popup.step {
+                crate::tui::widgets::LoginStep::OAuthWaiting => {
+                    app.login_popup.code_input.push_str(&trimmed);
+                }
+                crate::tui::widgets::LoginStep::EnterApiKey => {
+                    app.login_popup.key_input.push_str(&trimmed);
+                }
+                _ => {}
+            }
+        }
+        return InputAction::None;
+    }
+
     if app.vim_mode && app.mode != AppMode::Insert {
         return InputAction::None;
     }
@@ -210,6 +229,14 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
 
     if app.pending_permission.is_some() {
         return popups::handle_permission_popup(app, key);
+    }
+
+    if app.welcome_screen.visible {
+        return popups::handle_welcome_screen(app, key);
+    }
+
+    if app.login_popup.visible {
+        return popups::handle_login_popup(app, key);
     }
 
     if app.context_menu.visible {

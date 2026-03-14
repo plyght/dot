@@ -2,7 +2,7 @@ pub(crate) mod schema;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use uuid::Uuid;
 

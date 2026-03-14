@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::tui::app::{App, ChipKind, InputChip};
-use crate::tui::widgets::{PaletteEntry, PaletteEntryKind};
+use crate::tui::app::{App, ChipKind, InputChip, StatusMessage};
+use crate::tui::widgets::{LoginStep, PaletteEntry, PaletteEntryKind};
 
 use super::InputAction;
 
@@ -293,6 +293,7 @@ pub(super) fn execute_command(app: &mut App, cmd_name: &str) -> InputAction {
             app.help_popup.open();
             InputAction::None
         }
+        "login" => InputAction::OpenLoginPopup,
         other => {
             if app.custom_command_names.contains(&other.to_string()) {
                 InputAction::RunCustomCommand {
@@ -480,6 +481,211 @@ pub(super) fn handle_permission_popup(app: &mut App, key: KeyEvent) -> InputActi
             }
             app.pending_permission = None;
             InputAction::AnswerPermission("deny".to_string())
+        }
+        _ => InputAction::None,
+    }
+}
+
+pub(super) fn handle_login_popup(app: &mut App, key: KeyEvent) -> InputAction {
+    let lp = &mut app.login_popup;
+    match lp.step {
+        LoginStep::SelectProvider => match key.code {
+            KeyCode::Esc => {
+                let back_to_welcome = lp.from_welcome;
+                lp.close();
+                if back_to_welcome {
+                    app.welcome_screen.open();
+                }
+                InputAction::None
+            }
+            KeyCode::Up => {
+                lp.up();
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                lp.down();
+                InputAction::None
+            }
+            KeyCode::Enter => {
+                let provider = lp.selected;
+                match provider {
+                    0 => {
+                        lp.provider = Some("anthropic".to_string());
+                        lp.step = LoginStep::SelectMethod;
+                        lp.selected = 0;
+                    }
+                    1 => {
+                        lp.provider = Some("openai".to_string());
+                        lp.step = LoginStep::EnterApiKey;
+                        lp.selected = 0;
+                        lp.key_input.clear();
+                    }
+                    2 => {
+                        lp.close();
+                        app.status_message = Some(StatusMessage::info(
+                            "run `dot login` from terminal for GitHub Copilot",
+                        ));
+                    }
+                    _ => {}
+                }
+                InputAction::None
+            }
+            _ => InputAction::None,
+        },
+        LoginStep::SelectMethod => match key.code {
+            KeyCode::Esc => {
+                lp.step = LoginStep::SelectProvider;
+                lp.selected = 0;
+                InputAction::None
+            }
+            KeyCode::Up => {
+                lp.up();
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                lp.down();
+                InputAction::None
+            }
+            KeyCode::Enter => {
+                let method = lp.selected;
+                match method {
+                    0 | 1 => {
+                        let create_key = method == 1;
+                        match crate::auth::oauth::generate_oauth_url(create_key) {
+                            Ok((url, verifier)) => {
+                                let _ = open::that(&url);
+                                lp.oauth_url = Some(url);
+                                lp.oauth_verifier = Some(verifier);
+                                lp.oauth_create_key = create_key;
+                                lp.code_input.clear();
+                                lp.step = LoginStep::OAuthWaiting;
+                            }
+                            Err(e) => {
+                                lp.close();
+                                app.status_message =
+                                    Some(StatusMessage::error(format!("oauth url: {e}")));
+                            }
+                        }
+                        InputAction::None
+                    }
+                    2 => {
+                        lp.step = LoginStep::EnterApiKey;
+                        lp.key_input.clear();
+                        InputAction::None
+                    }
+                    _ => InputAction::None,
+                }
+            }
+            _ => InputAction::None,
+        },
+        LoginStep::EnterApiKey => match key.code {
+            KeyCode::Esc => {
+                lp.step = LoginStep::SelectProvider;
+                lp.selected = 0;
+                lp.key_input.clear();
+                InputAction::None
+            }
+            KeyCode::Enter => {
+                let key = lp.key_input.trim().to_string();
+                if key.is_empty() {
+                    return InputAction::None;
+                }
+                let provider = lp.provider.clone().unwrap_or_default();
+                lp.close();
+                InputAction::LoginSubmitApiKey { provider, key }
+            }
+            KeyCode::Backspace => {
+                lp.key_input.pop();
+                InputAction::None
+            }
+            KeyCode::Char(c) => {
+                lp.key_input.push(c);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        },
+        LoginStep::OAuthWaiting => match key.code {
+            KeyCode::Esc => {
+                lp.step = LoginStep::SelectProvider;
+                lp.selected = 0;
+                lp.code_input.clear();
+                lp.oauth_url = None;
+                lp.oauth_verifier = None;
+                InputAction::None
+            }
+            KeyCode::Enter => {
+                let code = lp.code_input.trim().to_string();
+                if code.is_empty() {
+                    return InputAction::None;
+                }
+                let verifier = lp.oauth_verifier.clone().unwrap_or_default();
+                let create_key = lp.oauth_create_key;
+                lp.step = LoginStep::OAuthExchanging;
+                InputAction::LoginOAuth {
+                    provider: "anthropic".to_string(),
+                    create_key,
+                    code,
+                    verifier,
+                }
+            }
+            KeyCode::Backspace => {
+                lp.code_input.pop();
+                InputAction::None
+            }
+            KeyCode::Char(c) => {
+                lp.code_input.push(c);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        },
+        LoginStep::OAuthExchanging => match key.code {
+            KeyCode::Esc => {
+                lp.close();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        },
+    }
+}
+
+pub(super) fn handle_welcome_screen(app: &mut App, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Up => {
+            app.welcome_screen.up();
+            InputAction::None
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            app.welcome_screen.down();
+            InputAction::None
+        }
+        KeyCode::Enter => {
+            if let Some(choice) = app.welcome_screen.confirm() {
+                match choice {
+                    crate::tui::widgets::WelcomeChoice::Login => {
+                        app.login_popup.open();
+                        app.login_popup.from_welcome = true;
+                        return InputAction::None;
+                    }
+                    crate::tui::widgets::WelcomeChoice::UseEnvKeys => {
+                        app.status_message = Some(crate::tui::app::StatusMessage::success(
+                            "using environment keys",
+                        ));
+                        InputAction::None
+                    }
+                    crate::tui::widgets::WelcomeChoice::SetEnvVars => {
+                        app.status_message = Some(crate::tui::app::StatusMessage::info(
+                            "set ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell",
+                        ));
+                        InputAction::None
+                    }
+                }
+            } else {
+                InputAction::None
+            }
+        }
+        KeyCode::Esc => {
+            app.welcome_screen.close();
+            InputAction::None
         }
         _ => InputAction::None,
     }

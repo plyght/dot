@@ -348,9 +348,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
             InputAction::None
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            if !app.selection.active
-                && rect_contains(app.layout.messages, col, row)
-            {
+            if !app.selection.active && rect_contains(app.layout.messages, col, row) {
                 let content_y = app.layout.messages.y;
                 if row >= content_y {
                     let content_row = (row - content_y) as u32;

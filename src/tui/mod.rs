@@ -48,7 +48,10 @@ fn cursor_style(shape: &CursorShape, blink: bool) -> SetCursorStyle {
 
 fn apply_cursor_style(app: &App) -> Result<()> {
     let (shape, blink) = if app.vim_mode && app.mode == app::AppMode::Normal {
-        let s = app.cursor_shape_normal.as_ref().unwrap_or(&app.cursor_shape);
+        let s = app
+            .cursor_shape_normal
+            .as_ref()
+            .unwrap_or(&app.cursor_shape);
         let b = app.cursor_blink_normal.unwrap_or(app.cursor_blink);
         (s, b)
     } else {
@@ -71,6 +74,7 @@ pub async fn run(
     skill_names: Vec<(String, String)>,
     hooks: HookRegistry,
     commands: CommandRegistry,
+    first_run: bool,
 ) -> Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stderr();
@@ -96,6 +100,7 @@ pub async fn run(
         skill_names,
         hooks,
         commands,
+        first_run,
     )
     .await;
 
@@ -139,6 +144,7 @@ async fn run_app(
     skill_names: Vec<(String, String)>,
     hooks: HookRegistry,
     commands: CommandRegistry,
+    first_run: bool,
 ) -> Result<ExitInfo> {
     let model_name = providers[0].model().to_string();
     let provider_name = providers[0].name().to_string();
@@ -192,6 +198,22 @@ async fn run_app(
     app.history = history;
     app.favorite_models = config.tui.favorite_models.clone();
     app.skill_entries = skill_names;
+
+    if first_run || resume_id.is_none() && {
+        let creds = crate::auth::Credentials::load().unwrap_or_default();
+        let has_creds = !creds.providers.is_empty();
+        let has_env = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+            .is_some()
+            || std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+                .is_some();
+        !has_creds && !has_env
+    } {
+        app.welcome_screen.open();
+    }
     {
         let agent_lock = agent.lock().await;
         let cmds = agent_lock.list_commands();

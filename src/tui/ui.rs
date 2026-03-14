@@ -19,6 +19,17 @@ fn is_compact(w: u16) -> bool {
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    if app.welcome_screen.visible || app.login_popup.from_welcome && app.login_popup.visible {
+        frame.render_widget(ratatui::widgets::Clear, frame.area());
+        if app.welcome_screen.visible {
+            ui_popups::draw_welcome_screen(frame, app);
+        }
+        if app.login_popup.visible {
+            ui_popups::draw_login_popup(frame, app);
+        }
+        return;
+    }
+
     let input_height = app.input_height(frame.area().width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -92,6 +103,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.rename_visible {
         ui_popups::draw_rename_popup(frame, app);
     }
+
+    if app.login_popup.visible {
+        ui_popups::draw_login_popup(frame, app);
+    }
+
 }
 
 fn draw_status_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -276,7 +292,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     return 1;
                 }
                 let lw: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-                if lw == 0 { 1 } else { (lw as u32).div_ceil(wrap_width as u32) }
+                if lw == 0 {
+                    1
+                } else {
+                    (lw as u32).div_ceil(wrap_width as u32)
+                }
             })
             .collect();
         let total_visual: u32 = wrap_heights.iter().sum();
@@ -391,7 +411,10 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             (app.max_scroll as usize, app.scroll_offset as usize)
         } else {
             let scale = app.max_scroll as f64 / u16::MAX as f64;
-            ((u16::MAX as usize), (app.scroll_offset as f64 / scale) as usize)
+            (
+                (u16::MAX as usize),
+                (app.scroll_offset as f64 / scale) as usize,
+            )
         };
         let mut state = ScrollbarState::new(sb_total).position(sb_pos);
         frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
@@ -444,12 +467,10 @@ fn render_message(
                 let wrapped = char_wrap(vec![content_line], content_width as u16);
                 for row in wrapped {
                     line_to_tool.push(None);
-                    let row_chars: usize = row.spans.iter().map(|s| s.content.chars().count()).sum();
+                    let row_chars: usize =
+                        row.spans.iter().map(|s| s.content.chars().count()).sum();
                     let left = w.saturating_sub(left_indent + row_chars + right_pad);
-                    let mut line_vec = vec![
-                        Span::raw(body_indent),
-                        Span::raw(" ".repeat(left)),
-                    ];
+                    let mut line_vec = vec![Span::raw(body_indent), Span::raw(" ".repeat(left))];
                     line_vec.extend(row.spans);
                     line_vec.push(Span::raw(" ".repeat(right_pad)));
                     lines.push(Line::from(line_vec));

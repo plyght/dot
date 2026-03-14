@@ -33,6 +33,10 @@ pub struct Cli {
     /// Print version
     #[arg(short = 'v', long = "version")]
     pub print_version: bool,
+
+    /// Simulate first run (show welcome screen)
+    #[arg(long = "first-run", hide = true)]
+    pub first_run: bool,
 }
 
 #[derive(Subcommand)]

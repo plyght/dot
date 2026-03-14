@@ -5,7 +5,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::app::App;
-use crate::tui::widgets::{PaletteEntryKind, ThinkingLevel, COMMANDS};
+use crate::tui::widgets::{
+    LoginPopup, LoginStep, PaletteEntryKind, ThinkingLevel, WelcomeScreen, COMMANDS,
+};
 
 fn popup_block(title: &str, _accent: Color, _muted: Color) -> Block<'static> {
     let line = Line::from(vec![
@@ -858,4 +860,217 @@ pub fn draw_file_picker(frame: &mut Frame, app: &mut App, input_area: Rect) {
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+pub fn draw_login_popup(frame: &mut Frame, app: &mut App) {
+    let lp = &app.login_popup;
+    let accent = app.theme.accent;
+    let muted = app.theme.muted_fg;
+
+    let (title, hint) = match lp.step {
+        LoginStep::SelectProvider => (
+            "login",
+            "esc cancel  \u{2191}\u{2193} navigate  enter select",
+        ),
+        LoginStep::SelectMethod => (
+            "anthropic",
+            "esc back  \u{2191}\u{2193} navigate  enter select",
+        ),
+        LoginStep::EnterApiKey => ("enter api key", "esc back  enter submit"),
+        LoginStep::OAuthWaiting => ("authorize", "esc cancel  enter submit code"),
+        LoginStep::OAuthExchanging => ("exchanging...", "esc cancel"),
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+
+    if lp.step == LoginStep::OAuthWaiting {
+        lines.push(Line::from(Span::styled(
+            "  browser opened for authorization",
+            Style::default().fg(accent),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  paste the URL or code after authorizing:",
+            Style::default(),
+        )));
+        lines.push(Line::from(""));
+        let display: String = if lp.code_input.is_empty() {
+            "paste code here...".to_string()
+        } else {
+            let len = lp.code_input.len();
+            if len > 40 {
+                format!("{}...", &lp.code_input[..37])
+            } else {
+                lp.code_input.clone()
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  \u{203a} ", Style::default().fg(accent)),
+            Span::styled(
+                display,
+                if lp.code_input.is_empty() {
+                    Style::default().fg(muted)
+                } else {
+                    Style::default()
+                },
+            ),
+        ]));
+    } else if lp.step == LoginStep::OAuthExchanging {
+        lines.push(Line::from(Span::styled(
+            "  exchanging code for credentials...",
+            Style::default().fg(accent),
+        )));
+    } else if lp.step == LoginStep::EnterApiKey {
+        let provider = lp.provider.as_deref().unwrap_or("provider");
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(format!("{} API key", provider), Style::default().fg(accent)),
+        ]));
+        lines.push(Line::from(""));
+        let masked: String = "\u{2022}".repeat(lp.key_input.len());
+        lines.push(Line::from(vec![
+            Span::styled("  \u{203a} ", Style::default().fg(accent)),
+            Span::styled(
+                if masked.is_empty() {
+                    "paste or type your key...".to_string()
+                } else {
+                    masked
+                },
+                if lp.key_input.is_empty() {
+                    Style::default().fg(muted)
+                } else {
+                    Style::default()
+                },
+            ),
+        ]));
+    } else {
+        let items: Vec<(&str, bool)> = match lp.step {
+            LoginStep::SelectProvider => LoginPopup::providers()
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (*p, i == lp.selected))
+                .collect(),
+            LoginStep::SelectMethod => LoginPopup::anthropic_methods()
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (*m, i == lp.selected))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (label, selected) in &items {
+            if *selected {
+                lines.push(Line::from(vec![
+                    Span::styled("  \u{203a} ", Style::default().fg(accent)),
+                    Span::styled(
+                        label.to_string(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("    ", Style::default()),
+                    Span::styled(label.to_string(), Style::default()),
+                ]));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", hint),
+        Style::default().fg(muted),
+    )));
+
+    let content_height = lines.len() + 2;
+    let content_width = 48;
+    let area = centered_popup(frame.area(), content_width, content_height);
+
+    let block = popup_block(title, accent, muted);
+    frame.render_widget(Clear, area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), inner);
+    app.layout.login_popup = Some(area);
+}
+
+pub fn draw_welcome_screen(frame: &mut Frame, app: &mut App) {
+    let accent = app.theme.accent;
+    let muted = app.theme.muted_fg;
+    let dim = Style::default().fg(Color::Indexed(8));
+
+    let inner_w: usize = 52;
+    let sep: String = "\u{2500}".repeat(inner_w);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+
+    lines.push(
+        Line::from(Span::styled(
+            "dot",
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ))
+        .alignment(Alignment::Center),
+    );
+    lines.push(Line::from(Span::styled("minimal ai agent", dim)).alignment(Alignment::Center));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(sep, dim)));
+    lines.push(Line::from(""));
+
+    lines.push(
+        Line::from(Span::styled("get started", Style::default())).alignment(Alignment::Center),
+    );
+    lines.push(Line::from(""));
+
+    let choices = WelcomeScreen::choices();
+    for (i, (label, desc)) in choices.iter().enumerate() {
+        let selected = i == app.welcome_screen.selected;
+        let (prefix, label_style) = if selected {
+            (
+                Span::styled("  \u{203a} ", Style::default().fg(accent)),
+                Style::default().add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (Span::styled("    ", Style::default()), Style::default())
+        };
+        lines.push(Line::from(vec![
+            prefix,
+            Span::styled(label.to_string(), label_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("      ", Style::default()),
+            Span::styled(desc.to_string(), Style::default().fg(muted)),
+        ]));
+        if i < choices.len() - 1 {
+            lines.push(Line::from(""));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(Span::styled(
+            "\u{2191}\u{2193} navigate   enter select   esc dismiss",
+            Style::default().fg(muted),
+        ))
+        .alignment(Alignment::Center),
+    );
+    lines.push(Line::from(""));
+
+    let full = frame.area();
+    frame.render_widget(Clear, full);
+
+    let content_height = lines.len() + 2;
+    let content_width = 54;
+    let area = centered_popup(full, content_width, content_height);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(accent));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), inner);
+    app.layout.welcome_screen = Some(area);
 }

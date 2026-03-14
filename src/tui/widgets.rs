@@ -256,6 +256,12 @@ pub const COMMANDS: &[SlashCommand] = &[
         description: "export session to markdown",
         shortcut: "",
     },
+    SlashCommand {
+        name: "login",
+        aliases: &["l"],
+        description: "manage provider credentials",
+        shortcut: "",
+    },
 ];
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaletteEntryKind {
@@ -634,6 +640,174 @@ pub fn time_ago(iso: &str) -> String {
         return format!("{}w ago", secs / 604800);
     }
     iso.to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LoginStep {
+    SelectProvider,
+    SelectMethod,
+    EnterApiKey,
+    OAuthWaiting,
+    OAuthExchanging,
+}
+
+pub struct LoginPopup {
+    pub visible: bool,
+    pub step: LoginStep,
+    pub selected: usize,
+    pub provider: Option<String>,
+    pub key_input: String,
+    pub status: Option<String>,
+    pub oauth_url: Option<String>,
+    pub oauth_verifier: Option<String>,
+    pub oauth_create_key: bool,
+    pub code_input: String,
+    pub from_welcome: bool,
+}
+
+impl Default for LoginPopup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LoginPopup {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            step: LoginStep::SelectProvider,
+            selected: 0,
+            provider: None,
+            key_input: String::new(),
+            status: None,
+            oauth_url: None,
+            oauth_verifier: None,
+            oauth_create_key: false,
+            code_input: String::new(),
+            from_welcome: false,
+        }
+    }
+
+    pub fn open(&mut self) {
+        self.visible = true;
+        self.step = LoginStep::SelectProvider;
+        self.selected = 0;
+        self.provider = None;
+        self.key_input.clear();
+        self.code_input.clear();
+        self.status = None;
+        self.oauth_url = None;
+        self.oauth_verifier = None;
+        self.oauth_create_key = false;
+        self.from_welcome = false;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+        self.key_input.clear();
+        self.code_input.clear();
+        self.status = None;
+        self.oauth_url = None;
+        self.oauth_verifier = None;
+    }
+
+    pub fn providers() -> &'static [&'static str] {
+        &["Anthropic", "OpenAI", "GitHub Copilot"]
+    }
+
+    pub fn anthropic_methods() -> &'static [&'static str] {
+        &[
+            "Claude Pro/Max (OAuth)",
+            "Create API Key (OAuth)",
+            "Enter API Key",
+        ]
+    }
+
+    pub fn up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn down(&mut self) {
+        let max = match self.step {
+            LoginStep::SelectProvider => Self::providers().len(),
+            LoginStep::SelectMethod => Self::anthropic_methods().len(),
+            LoginStep::EnterApiKey | LoginStep::OAuthWaiting | LoginStep::OAuthExchanging => 0,
+        };
+        if max > 0 && self.selected + 1 < max {
+            self.selected += 1;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WelcomeChoice {
+    Login,
+    UseEnvKeys,
+    SetEnvVars,
+}
+
+pub struct WelcomeScreen {
+    pub visible: bool,
+    pub selected: usize,
+}
+
+impl Default for WelcomeScreen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WelcomeScreen {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            selected: 0,
+        }
+    }
+
+    pub fn open(&mut self) {
+        self.visible = true;
+        self.selected = 0;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn choices() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("Login", "OAuth or API key"),
+            ("Use env keys", "ANTHROPIC_API_KEY / OPENAI_API_KEY"),
+            ("Set env variables", "configure keys in your shell"),
+        ]
+    }
+
+    pub fn up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn down(&mut self) {
+        if self.selected + 1 < Self::choices().len() {
+            self.selected += 1;
+        }
+    }
+
+    pub fn confirm(&mut self) -> Option<WelcomeChoice> {
+        if !self.visible {
+            return None;
+        }
+        self.visible = false;
+        match self.selected {
+            0 => Some(WelcomeChoice::Login),
+            1 => Some(WelcomeChoice::UseEnvKeys),
+            2 => Some(WelcomeChoice::SetEnvVars),
+            _ => None,
+        }
+    }
 }
 
 pub struct MessageContextMenu {

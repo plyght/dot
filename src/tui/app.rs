@@ -10,8 +10,8 @@ use crate::config::CursorShape;
 use crate::tui::theme::Theme;
 use crate::tui::tools::{StreamSegment, ToolCallDisplay, ToolCategory, extract_tool_detail};
 use crate::tui::widgets::{
-    AgentSelector, CommandPalette, FilePicker, HelpPopup, MessageContextMenu, ModelSelector,
-    SessionSelector, ThinkingLevel, ThinkingSelector,
+    AgentSelector, CommandPalette, FilePicker, HelpPopup, LoginPopup, MessageContextMenu,
+    ModelSelector, SessionSelector, ThinkingLevel, ThinkingSelector, WelcomeScreen,
 };
 
 pub struct ChatMessage {
@@ -268,6 +268,8 @@ pub struct LayoutRects {
     pub question_popup: Option<Rect>,
     pub permission_popup: Option<Rect>,
     pub file_picker: Option<Rect>,
+    pub login_popup: Option<Rect>,
+    pub welcome_screen: Option<Rect>,
 }
 
 pub struct RenderCache {
@@ -346,6 +348,8 @@ pub struct App {
     pub rename_visible: bool,
     pub favorite_models: Vec<String>,
     pub file_picker: FilePicker,
+    pub login_popup: LoginPopup,
+    pub welcome_screen: WelcomeScreen,
     pub chips: Vec<InputChip>,
     pub active_subagent: Option<SubagentState>,
     pub background_subagents: Vec<BackgroundSubagentInfo>,
@@ -437,6 +441,8 @@ impl App {
             rename_visible: false,
             favorite_models: Vec::new(),
             file_picker: FilePicker::new(),
+            login_popup: LoginPopup::new(),
+            welcome_screen: WelcomeScreen::new(),
             chips: Vec::new(),
             active_subagent: None,
             background_subagents: Vec::new(),

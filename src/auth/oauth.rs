@@ -104,7 +104,52 @@ async fn create_api_key_from_token(access_token: &str) -> Result<String> {
     Ok(key.to_string())
 }
 
-pub(super) async fn oauth_pkce_flow(create_key: bool) -> Result<ProviderCredential> {
+pub fn generate_oauth_url(create_key: bool) -> Result<(String, String)> {
+    let (verifier, challenge) = generate_pkce();
+    let auth_base = if create_key {
+        ANTHROPIC_AUTH_URL_CONSOLE
+    } else {
+        ANTHROPIC_AUTH_URL_MAX
+    };
+    let auth_url = {
+        let mut u = url::Url::parse(auth_base).context("parsing auth URL")?;
+        u.query_pairs_mut()
+            .append_pair("code", "true")
+            .append_pair("client_id", ANTHROPIC_CLIENT_ID)
+            .append_pair("response_type", "code")
+            .append_pair("redirect_uri", REDIRECT_URI)
+            .append_pair("scope", ANTHROPIC_SCOPES)
+            .append_pair("code_challenge", &challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("state", &verifier);
+        u.to_string()
+    };
+    Ok((auth_url, verifier))
+}
+
+pub async fn exchange_oauth_code(
+    code: &str,
+    verifier: &str,
+    create_key: bool,
+) -> Result<ProviderCredential> {
+    let token = exchange_code_for_token(code, verifier).await?;
+    if create_key {
+        let api_key = create_api_key_from_token(&token.access_token).await?;
+        Ok(ProviderCredential::ApiKey { key: api_key })
+    } else {
+        let expires_at = token
+            .expires_in
+            .map(|e| chrono::Utc::now().timestamp() + (e as i64));
+        Ok(ProviderCredential::OAuth {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            expires_at,
+            api_key: None,
+        })
+    }
+}
+
+pub async fn oauth_pkce_flow(create_key: bool) -> Result<ProviderCredential> {
     let (verifier, challenge) = generate_pkce();
     let auth_base = if create_key {
         ANTHROPIC_AUTH_URL_CONSOLE
