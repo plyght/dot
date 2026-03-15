@@ -171,6 +171,10 @@ src/
   db/              SQLite session and message persistence
 ```
 
+## TUI Scrolling
+
+The message area uses virtual scrolling — only a window of lines around the viewport is passed to ratatui's `Paragraph`. Lines are pre-wrapped via `pre_wrap_lines()` in `tui/ui.rs` before caching, so every cached line fits within `wrap_width` and equals exactly 1 visual row. The `Paragraph` is rendered **without** `Wrap` to avoid any mismatch between our scroll math (`total_visual = line_count`) and ratatui's internal word wrapping, which can produce more rows than `div_ceil(width)` estimates. Never re-add `Wrap { trim: false }` to the message Paragraph — it will break scroll-to-bottom.
+
 ## Testing
 
 - Avoid mocks as much as possible

@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Color;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::agent::TodoStatus;
 use crate::tui::app::{App, AppMode, ChatMessage, ChipKind, InputChip, StatusLevel};
@@ -284,26 +284,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             all_lines.extend(empty_lines);
         }
 
-        let wrap_heights: Vec<u32> = all_lines
-            .iter()
-            .map(|line| {
-                if wrap_width < 1 {
-                    return 1;
-                }
-                let lw: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-                if lw == 0 {
-                    1
-                } else {
-                    (lw as u32).div_ceil(wrap_width as u32)
-                }
-            })
-            .collect();
-        let total_visual: u32 = wrap_heights.iter().sum();
+        let (all_lines, line_to_msg, line_to_tool) =
+            pre_wrap_lines(all_lines, line_to_msg, line_to_tool, wrap_width);
+        let total_visual = all_lines.len() as u32;
+        let wrap_heights: Vec<u32> = vec![1; all_lines.len()];
 
         app.content_width = content_width;
-        app.visual_lines = compute_visual_lines(&all_lines, wrap_width);
-        app.message_line_map = expand_line_to_msg_fast(&wrap_heights, &line_to_msg);
-        app.tool_line_map = expand_line_to_tool_fast(&wrap_heights, &line_to_tool);
+        app.message_line_map.clone_from(&line_to_msg);
+        app.tool_line_map.clone_from(&line_to_tool);
 
         app.render_cache = Some(crate::tui::app::RenderCache {
             lines: all_lines,
@@ -327,33 +315,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let target = app.scroll_offset;
     let margin = visible.min(50);
-    let skip_visual = target.saturating_sub(margin);
-    let end_visual = target + visible + margin;
-
-    let mut vis: u32 = 0;
-    let mut skip_lines: usize = 0;
-    let mut skip_vis: u32 = 0;
-    let mut end_lines: usize = cache.lines.len();
-    for (i, &w) in cache.wrap_heights.iter().enumerate() {
-        if vis + w <= skip_visual {
-            vis += w;
-            skip_lines = i + 1;
-            skip_vis = vis;
-            continue;
-        }
-        vis += w;
-        if vis >= end_visual {
-            end_lines = i + 1;
-            break;
-        }
-    }
+    let skip_lines = target.saturating_sub(margin) as usize;
+    let end_lines = ((target + visible + margin) as usize).min(cache.lines.len());
 
     let render_lines = &cache.lines[skip_lines..end_lines];
-    let render_scroll = (target - skip_vis).min(u16::MAX as u32) as u16;
+    let render_scroll = (target - skip_lines as u32).min(u16::MAX as u32) as u16;
 
     let paragraph = Paragraph::new(render_lines.to_vec())
         .block(block)
-        .wrap(Wrap { trim: false })
         .scroll((render_scroll, 0));
 
     frame.render_widget(paragraph, paragraph_area);
@@ -1114,6 +1083,63 @@ fn format_tokens(n: u32) -> String {
     }
 }
 
+fn pre_wrap_lines(
+    lines: Vec<Line<'static>>,
+    line_to_msg: Vec<usize>,
+    line_to_tool: Vec<Option<(usize, usize)>>,
+    width: u16,
+) -> (Vec<Line<'static>>, Vec<usize>, Vec<Option<(usize, usize)>>) {
+    use unicode_width::UnicodeWidthChar;
+    if width == 0 {
+        return (lines, line_to_msg, line_to_tool);
+    }
+    let w = width as usize;
+    let mut out_lines = Vec::with_capacity(lines.len());
+    let mut out_msg = Vec::with_capacity(lines.len());
+    let mut out_tool = Vec::with_capacity(lines.len());
+
+    for (i, line) in lines.into_iter().enumerate() {
+        let msg = line_to_msg.get(i).copied().unwrap_or(0);
+        let tool = line_to_tool.get(i).copied().flatten();
+        if line.width() <= w {
+            out_lines.push(line);
+            out_msg.push(msg);
+            out_tool.push(tool);
+            continue;
+        }
+        let mut row: Vec<Span<'static>> = Vec::new();
+        let mut row_len = 0usize;
+        for span in line.spans {
+            let style = span.style;
+            let text = span.content.to_string();
+            let mut seg_start = 0;
+            for (byte_pos, ch) in text.char_indices() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if row_len + cw > w && row_len > 0 {
+                    if seg_start < byte_pos {
+                        row.push(Span::styled(text[seg_start..byte_pos].to_string(), style));
+                    }
+                    out_lines.push(Line::from(std::mem::take(&mut row)));
+                    out_msg.push(msg);
+                    out_tool.push(tool);
+                    row_len = 0;
+                    seg_start = byte_pos;
+                }
+                row_len += cw;
+            }
+            if seg_start < text.len() {
+                row.push(Span::styled(text[seg_start..].to_string(), style));
+            }
+        }
+        if !row.is_empty() {
+            out_lines.push(Line::from(row));
+            out_msg.push(msg);
+            out_tool.push(tool);
+        }
+    }
+    (out_lines, out_msg, out_tool)
+}
+
 fn char_wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return lines;
@@ -1154,22 +1180,6 @@ fn char_wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     result
 }
 
-fn compute_visual_lines(lines: &[Line], width: u16) -> Vec<String> {
-    let mut visual = Vec::new();
-    for line in lines {
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let chars: Vec<char> = text.chars().collect();
-        if chars.is_empty() || width == 0 {
-            visual.push(String::new());
-        } else {
-            for chunk in chars.chunks(width as usize) {
-                visual.push(chunk.iter().collect());
-            }
-        }
-    }
-    visual
-}
-
 fn render_selection_highlight(frame: &mut Frame, app: &App, area: Rect) {
     let range = match app.selection.ordered() {
         Some(r) => r,
@@ -1207,29 +1217,4 @@ fn render_selection_highlight(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
     }
-}
-
-fn expand_line_to_tool_fast(
-    wrap_heights: &[u32],
-    line_to_tool: &[Option<(usize, usize)>],
-) -> Vec<Option<(usize, usize)>> {
-    let mut result = Vec::new();
-    for (i, &h) in wrap_heights.iter().enumerate() {
-        let tool = line_to_tool.get(i).copied().flatten();
-        for _ in 0..h {
-            result.push(tool);
-        }
-    }
-    result
-}
-
-fn expand_line_to_msg_fast(wrap_heights: &[u32], line_to_msg: &[usize]) -> Vec<usize> {
-    let mut result = Vec::new();
-    for (i, &h) in wrap_heights.iter().enumerate() {
-        let msg_idx = line_to_msg.get(i).copied().unwrap_or(0);
-        for _ in 0..h {
-            result.push(msg_idx);
-        }
-    }
-    result
 }

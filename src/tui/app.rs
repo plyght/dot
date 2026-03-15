@@ -327,7 +327,7 @@ pub struct App {
     pub vim_mode: bool,
 
     pub selection: TextSelection,
-    pub visual_lines: Vec<String>,
+
     pub content_width: u16,
 
     pub context_window: u32,
@@ -422,7 +422,7 @@ impl App {
             conversation_title: None,
             vim_mode,
             selection: TextSelection::default(),
-            visual_lines: Vec::new(),
+
             content_width: 0,
             context_window: 0,
             last_input_tokens: 0,
@@ -1024,9 +1024,12 @@ impl App {
     }
 
     pub fn scroll_down(&mut self, n: u32) {
-        self.scroll_offset = self.scroll_offset.saturating_add(n).min(self.max_scroll);
-        if self.scroll_offset >= self.max_scroll {
+        let target = self.scroll_offset.saturating_add(n);
+        if target >= self.max_scroll {
             self.follow_bottom = true;
+            self.scroll_offset = self.max_scroll;
+        } else {
+            self.scroll_offset = target;
         }
     }
 
@@ -1057,7 +1060,7 @@ impl App {
         self.attachments.clear();
         self.conversation_title = None;
         self.selection.clear();
-        self.visual_lines.clear();
+
         self.todos.clear();
         self.message_line_map.clear();
         self.tool_line_map.clear();
@@ -1163,16 +1166,21 @@ impl App {
 
     pub fn extract_selected_text(&self) -> Option<String> {
         let ((sc, sr), (ec, er)) = self.selection.ordered()?;
-        if self.visual_lines.is_empty() || self.content_width == 0 {
+        let cache = self.render_cache.as_ref()?;
+        if cache.lines.is_empty() || self.content_width == 0 {
             return None;
         }
         let mut text = String::new();
         for row in sr..=er {
-            if row as usize >= self.visual_lines.len() {
+            if row as usize >= cache.lines.len() {
                 break;
             }
-            let line = &self.visual_lines[row as usize];
-            let chars: Vec<char> = line.chars().collect();
+            let line_text: String = cache.lines[row as usize]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            let chars: Vec<char> = line_text.chars().collect();
             let start_col = if row == sr {
                 (sc as usize).min(chars.len())
             } else {
