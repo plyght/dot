@@ -294,6 +294,7 @@ pub(super) fn execute_command(app: &mut App, cmd_name: &str) -> InputAction {
             InputAction::None
         }
         "login" => InputAction::OpenLoginPopup,
+        "aside" | "btw" => InputAction::None,
         other => {
             if app.custom_command_names.contains(&other.to_string()) {
                 InputAction::RunCustomCommand {
@@ -355,6 +356,30 @@ pub(super) fn handle_context_menu(app: &mut App, key: KeyEvent) -> InputAction {
             } else {
                 InputAction::None
             }
+        }
+        _ => InputAction::None,
+    }
+}
+
+pub(super) fn handle_aside_popup(app: &mut App, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char(' ') => {
+            app.aside_popup.close();
+            InputAction::None
+        }
+        KeyCode::Enter => {
+            if app.aside_popup.done {
+                app.aside_popup.close();
+            }
+            InputAction::None
+        }
+        KeyCode::Up => {
+            app.aside_popup.scroll_up();
+            InputAction::None
+        }
+        KeyCode::Down => {
+            app.aside_popup.scroll_down();
+            InputAction::None
         }
         _ => InputAction::None,
     }

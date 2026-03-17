@@ -79,6 +79,9 @@ pub enum InputAction {
         code: String,
         verifier: String,
     },
+    AskAside {
+        question: String,
+    },
 }
 
 enum PasteItem {
@@ -237,6 +240,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             app.help_popup.close();
         }
         return InputAction::None;
+    }
+
+    if app.aside_popup.visible {
+        return popups::handle_aside_popup(app, key);
     }
 
     if app.rename_visible {

@@ -262,6 +262,12 @@ pub const COMMANDS: &[SlashCommand] = &[
         description: "manage provider credentials",
         shortcut: "",
     },
+    SlashCommand {
+        name: "aside",
+        aliases: &["btw"],
+        description: "ask a quick side question",
+        shortcut: "",
+    },
 ];
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaletteEntryKind {
@@ -1035,5 +1041,55 @@ impl FilePicker {
         } else {
             None
         }
+    }
+}
+
+pub struct AsidePopup {
+    pub visible: bool,
+    pub question: String,
+    pub response: String,
+    pub done: bool,
+    pub scroll_offset: u16,
+}
+
+impl Default for AsidePopup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsidePopup {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            question: String::new(),
+            response: String::new(),
+            done: false,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn open(&mut self, question: String) {
+        self.visible = true;
+        self.question = question;
+        self.response.clear();
+        self.done = false;
+        self.scroll_offset = 0;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+        self.question.clear();
+        self.response.clear();
+        self.done = false;
+        self.scroll_offset = 0;
+    }
+
+    pub fn scroll_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+    }
+
+    pub fn scroll_down(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_add(1);
     }
 }

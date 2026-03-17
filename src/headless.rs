@@ -570,6 +570,9 @@ fn handle_event(
         AgentEvent::ToolCallInputDelta(_) => {
             // Not useful in headless — tool input is streamed to the model, not the user
         }
+        AgentEvent::AsideDelta(_) | AgentEvent::AsideDone | AgentEvent::AsideError(_) => {
+            // Aside is TUI-only
+        }
     }
 }
 

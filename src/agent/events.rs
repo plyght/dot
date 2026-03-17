@@ -94,6 +94,9 @@ pub enum AgentEvent {
         updated: usize,
         deleted: usize,
     },
+    AsideDelta(String),
+    AsideDone,
+    AsideError(String),
 }
 
 pub(super) struct PendingToolCall {

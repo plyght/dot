@@ -1054,3 +1054,73 @@ pub fn draw_welcome_screen(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(lines), inner);
     app.layout.welcome_screen = Some(area);
 }
+
+pub fn draw_aside_popup(frame: &mut Frame, app: &mut App) {
+    let accent = app.theme.accent;
+    let muted = app.theme.muted_fg;
+    let full = frame.area();
+
+    let popup_width = (full.width * 3 / 4).max(40).min(80) as usize;
+    let popup_max_height = (full.height * 3 / 4).max(10) as usize;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        app.aside_popup.question.clone(),
+        Style::default().fg(accent).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    if app.aside_popup.response.is_empty() && !app.aside_popup.done {
+        lines.push(Line::from(Span::styled(
+            "thinking...",
+            Style::default().fg(muted),
+        )));
+    } else {
+        let wrap_width = popup_width.saturating_sub(4);
+        for line in app.aside_popup.response.lines() {
+            if line.is_empty() {
+                lines.push(Line::from(""));
+            } else {
+                let chars: Vec<char> = line.chars().collect();
+                let mut start = 0;
+                while start < chars.len() {
+                    let end = (start + wrap_width).min(chars.len());
+                    let chunk: String = chars[start..end].iter().collect();
+                    lines.push(Line::from(chunk));
+                    start = end;
+                }
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    let hint = if app.aside_popup.done {
+        "esc/space dismiss   \u{2191}\u{2193} scroll"
+    } else {
+        "esc dismiss   streaming..."
+    };
+    lines.push(
+        Line::from(Span::styled(hint.to_owned(), Style::default().fg(muted)))
+            .alignment(Alignment::Center),
+    );
+
+    let content_height = lines.len().min(popup_max_height) + 2;
+    let area = centered_popup(full, popup_width, content_height);
+
+    let scroll = app.aside_popup.scroll_offset;
+    let max_scroll = lines.len().saturating_sub(content_height.saturating_sub(2)) as u16;
+    if scroll > max_scroll {
+        app.aside_popup.scroll_offset = max_scroll;
+    }
+
+    let block = popup_block("aside", accent, muted);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((app.aside_popup.scroll_offset, 0)),
+        inner,
+    );
+    app.layout.aside_popup = Some(area);
+}

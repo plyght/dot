@@ -159,8 +159,14 @@ impl Agent {
     fn provider_arc(&self) -> Arc<dyn Provider> {
         Arc::clone(&self.providers[self.active])
     }
+    pub fn aside_provider(&self) -> Arc<dyn Provider> {
+        Arc::clone(&self.providers[self.active])
+    }
     pub fn set_background_tx(&mut self, tx: UnboundedSender<AgentEvent>) {
         self.background_tx = Some(tx);
+    }
+    pub fn background_tx(&self) -> Option<UnboundedSender<AgentEvent>> {
+        self.background_tx.clone()
     }
     fn event_context(&self, event: &Event) -> EventContext {
         EventContext {

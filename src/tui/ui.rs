@@ -109,6 +109,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.login_popup.visible {
         ui_popups::draw_login_popup(frame, app);
     }
+
+    if app.aside_popup.visible {
+        ui_popups::draw_aside_popup(frame, app);
+    }
 }
 
 fn draw_status_header(frame: &mut Frame, app: &App, area: Rect) {

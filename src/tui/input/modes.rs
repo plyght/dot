@@ -340,6 +340,12 @@ fn handle_send(app: &mut App) -> InputAction {
                 cmd.as_str(),
                 "model" | "agent" | "thinking" | "sessions" | "new" | "clear" | "help" | "export"
             );
+            if matches!(cmd.as_str(), "aside" | "btw") {
+                if args.is_empty() {
+                    return InputAction::None;
+                }
+                return InputAction::AskAside { question: args };
+            }
             if cmd == "rename" {
                 return if args.is_empty() {
                     InputAction::OpenRenamePopup

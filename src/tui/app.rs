@@ -10,8 +10,9 @@ use crate::config::CursorShape;
 use crate::tui::theme::Theme;
 use crate::tui::tools::{StreamSegment, ToolCallDisplay, ToolCategory, extract_tool_detail};
 use crate::tui::widgets::{
-    AgentSelector, CommandPalette, FilePicker, HelpPopup, LoginPopup, MessageContextMenu,
-    ModelSelector, SessionSelector, ThinkingLevel, ThinkingSelector, WelcomeScreen,
+    AgentSelector, AsidePopup, CommandPalette, FilePicker, HelpPopup, LoginPopup,
+    MessageContextMenu, ModelSelector, SessionSelector, ThinkingLevel, ThinkingSelector,
+    WelcomeScreen,
 };
 
 type ModelFetchReceiver =
@@ -287,6 +288,7 @@ pub struct LayoutRects {
     pub file_picker: Option<Rect>,
     pub login_popup: Option<Rect>,
     pub welcome_screen: Option<Rect>,
+    pub aside_popup: Option<Rect>,
 }
 
 pub struct RenderCache {
@@ -367,6 +369,7 @@ pub struct App {
     pub file_picker: FilePicker,
     pub login_popup: LoginPopup,
     pub welcome_screen: WelcomeScreen,
+    pub aside_popup: AsidePopup,
     pub chips: Vec<InputChip>,
     pub active_subagent: Option<SubagentState>,
     pub background_subagents: Vec<BackgroundSubagentInfo>,
@@ -460,6 +463,7 @@ impl App {
             file_picker: FilePicker::new(),
             login_popup: LoginPopup::new(),
             welcome_screen: WelcomeScreen::new(),
+            aside_popup: AsidePopup::new(),
             chips: Vec::new(),
             active_subagent: None,
             background_subagents: Vec::new(),
@@ -774,6 +778,16 @@ impl App {
                         parts.join(" ")
                     )));
                 }
+            }
+            AgentEvent::AsideDelta(text) => {
+                self.aside_popup.response.push_str(&text);
+            }
+            AgentEvent::AsideDone => {
+                self.aside_popup.done = true;
+            }
+            AgentEvent::AsideError(msg) => {
+                self.aside_popup.response = format!("Error: {msg}");
+                self.aside_popup.done = true;
             }
         }
         self.mark_dirty();

@@ -342,6 +342,7 @@ pub async fn dispatch_acp_action(
         | InputAction::OpenLoginPopup
         | InputAction::LoginSubmitApiKey { .. }
         | InputAction::LoginOAuth { .. }
+        | InputAction::AskAside { .. }
         | InputAction::None => {
             app.status_message = Some(app::StatusMessage::info("not available in ACP mode"));
         }
@@ -1058,6 +1059,50 @@ pub async fn dispatch_action(
                     }
                 }
             });
+        }
+        InputAction::AskAside { question } => {
+            let agent_lock = agent.lock().await;
+            let provider = agent_lock.aside_provider();
+            let messages = agent_lock.messages().to_vec();
+            let bg_tx = agent_lock.background_tx();
+            drop(agent_lock);
+            if let Some(tx) = bg_tx {
+                app.aside_popup.open(question.clone());
+                let mut aside_messages = messages;
+                aside_messages.push(crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: vec![crate::provider::ContentBlock::Text(question)],
+                });
+                tokio::spawn(async move {
+                    let system = "You are answering a quick side question. Be concise and helpful. \
+                                  You have full visibility into the conversation so far. \
+                                  You have no tools available.";
+                    match provider
+                        .stream(&aside_messages, Some(system), &[], 2048, 0)
+                        .await
+                    {
+                        Ok(mut rx) => {
+                            while let Some(event) = rx.recv().await {
+                                match event.event_type {
+                                    crate::provider::StreamEventType::TextDelta(text) => {
+                                        let _ = tx.send(crate::agent::AgentEvent::AsideDelta(text));
+                                    }
+                                    crate::provider::StreamEventType::MessageEnd { .. } => {
+                                        let _ = tx.send(crate::agent::AgentEvent::AsideDone);
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(crate::agent::AgentEvent::AsideError(format!("{e}")));
+                        }
+                    }
+                });
+            } else {
+                app.status_message = Some(app::StatusMessage::error("aside not available"));
+            }
         }
         InputAction::AnswerPermission(_) | InputAction::None => {}
         InputAction::OpenRenamePopup => {
