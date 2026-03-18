@@ -267,6 +267,8 @@ pub async fn dispatch_acp_action(
         InputAction::ClearConversation => app.clear_conversation(),
         InputAction::ToggleThinking => {
             app.thinking_expanded = !app.thinking_expanded;
+            app.thinking_collapse_at = None;
+            app.auto_opened_thinking = false;
             app.mark_dirty();
         }
         InputAction::CopyMessage(idx) => {
@@ -765,6 +767,8 @@ pub async fn dispatch_action(
         InputAction::ClearConversation => app.clear_conversation(),
         InputAction::ToggleThinking => {
             app.thinking_expanded = !app.thinking_expanded;
+            app.thinking_collapse_at = None;
+            app.auto_opened_thinking = false;
             app.mark_dirty();
         }
         InputAction::OpenThinkingSelector => {

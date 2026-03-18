@@ -431,6 +431,14 @@ async fn handle_event(
         AppEvent::Paste(text) => input::handle_paste(app, text),
         AppEvent::Tick => {
             app.tick_count = app.tick_count.wrapping_add(1);
+            if let Some(at) = app.thinking_collapse_at {
+                if std::time::Instant::now() >= at {
+                    app.thinking_expanded = false;
+                    app.auto_opened_thinking = false;
+                    app.thinking_collapse_at = None;
+                    app.mark_dirty();
+                }
+            }
             if app.status_message.as_ref().is_some_and(|s| s.expired()) {
                 app.status_message = None;
                 app.mark_dirty();

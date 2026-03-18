@@ -288,7 +288,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             let stream_msg_idx = app.messages.len();
             ui_tools::render_streaming_state(
                 app,
-                inner.width,
+                wrap_width,
                 &mut all_lines,
                 &mut line_to_tool,
                 stream_msg_idx,
@@ -316,7 +316,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         if all_lines.is_empty() {
-            let empty_lines = ui_popups::draw_empty_state(app, inner.width);
+            let empty_lines = ui_popups::draw_empty_state(app, inner.width, inner.height);
             for _ in &empty_lines {
                 line_to_tool.push(None);
             }
@@ -451,6 +451,17 @@ fn render_message(
 
     match msg.role.as_str() {
         "user" => {
+            if msg_idx > 0 {
+                let sep_width = ctx.inner_width.saturating_sub(4) as usize;
+                if sep_width > 0 {
+                    lines.push(Line::from(vec![
+                        Span::raw(body_indent),
+                        Span::styled("\u{2500}".repeat(sep_width), ctx.theme.message_separator),
+                    ]));
+                    line_to_tool.push(None);
+                }
+            }
+
             let w = ctx.inner_width as usize;
             let right_pad = 2usize;
             let left_indent = body_indent_cols as usize;
@@ -508,6 +519,8 @@ fn render_message(
                     compact,
                     lines,
                     line_to_tool,
+                    msg_idx,
+                    ctx.inner_width,
                 );
             }
             if let Some(ref segments) = msg.segments {
@@ -633,12 +646,16 @@ fn render_thinking_block(
     compact: bool,
     lines: &mut Vec<Line<'static>>,
     line_to_tool: &mut Vec<Option<(usize, usize)>>,
+    msg_idx: usize,
+    width: u16,
 ) {
     let pad = if compact { "  " } else { "    " };
+    let prefix = format!("{}\u{2502} ", pad);
+    let prefix_chars = prefix.chars().count();
     let word_count = thinking.split_whitespace().count();
     let secs = (word_count / 8).max(1);
     if expanded {
-        line_to_tool.push(None);
+        line_to_tool.push(Some((msg_idx, usize::MAX)));
         lines.push(Line::from(vec![
             Span::styled(format!("{}\u{25be} ", pad), theme.dim),
             Span::styled(
@@ -648,22 +665,32 @@ fn render_thinking_block(
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
+        let content_width = (width as usize).saturating_sub(prefix_chars);
+        let thinking_style = Style::default()
+            .fg(theme.muted_fg)
+            .add_modifier(Modifier::ITALIC);
         for text_line in thinking.lines() {
-            line_to_tool.push(None);
-            lines.push(Line::from(vec![
-                Span::styled(format!("{}\u{2502} ", pad), theme.dim),
-                Span::styled(
-                    text_line.to_string(),
-                    Style::default()
-                        .fg(theme.muted_fg)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]));
+            let chars: Vec<char> = text_line.chars().collect();
+            if content_width == 0 || chars.len() <= content_width {
+                line_to_tool.push(None);
+                lines.push(Line::from(vec![
+                    Span::styled(prefix.clone(), theme.dim),
+                    Span::styled(text_line.to_string(), thinking_style),
+                ]));
+            } else {
+                for chunk in chars.chunks(content_width) {
+                    line_to_tool.push(None);
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix.clone(), theme.dim),
+                        Span::styled(chunk.iter().collect::<String>(), thinking_style),
+                    ]));
+                }
+            }
         }
         line_to_tool.push(None);
         lines.push(Line::from(Span::styled(pad.to_string(), theme.dim)));
     } else {
-        line_to_tool.push(None);
+        line_to_tool.push(Some((msg_idx, usize::MAX)));
         lines.push(Line::from(vec![
             Span::styled(format!("{}\u{25b8} ", pad), theme.dim),
             Span::styled(
@@ -672,7 +699,6 @@ fn render_thinking_block(
                     .fg(theme.muted_fg)
                     .add_modifier(Modifier::ITALIC),
             ),
-            Span::styled("  [t]", theme.dim),
         ]));
     }
 }
@@ -833,14 +859,11 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         }
         let mut right_spans: Vec<Span<'static>> = Vec::new();
         if let Some(elapsed) = app.streaming_elapsed_secs() {
-            right_spans.push(Span::styled(
-                format!(" \u{00b7} {}", format_elapsed(elapsed)),
-                dim,
-            ));
+            right_spans.push(Span::styled(format!(" {}", format_elapsed(elapsed)), dim));
         }
         if !app.message_queue.is_empty() {
             right_spans.push(Span::styled(
-                format!(" \u{00b7} {} queued", app.message_queue.len()),
+                format!(" {} queued", app.message_queue.len()),
                 dim,
             ));
         }
@@ -948,7 +971,9 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let paragraph = Paragraph::new(wrapped).style(text_style);
     frame.render_widget(paragraph, inner);
     if can_edit && !app.model_selector.visible && (has_input || !app.is_streaming) {
-        let (cx, cy) = cursor_position(&app.input, app.cursor_pos, inner);
+        let display = app.display_input();
+        let dcursor = app.display_cursor_pos();
+        let (cx, cy) = cursor_position(&display, dcursor, inner);
         if cy < inner.y + inner.height {
             frame.set_cursor_position((cx, cy));
         }

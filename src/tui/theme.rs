@@ -111,6 +111,12 @@ pub struct Theme {
     pub subagent_header: Style,
     pub subagent_done: Style,
     pub subagent_working: Style,
+    pub diff_add_bg: Color,
+    pub diff_remove_bg: Color,
+    pub assistant_marker: Style,
+    pub user_role_label: Style,
+    pub assistant_role_label: Style,
+    pub message_separator: Style,
 }
 
 impl Theme {
@@ -205,6 +211,12 @@ impl Theme {
             subagent_header: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             subagent_done: Style::default().fg(green),
             subagent_working: Style::default().fg(accent),
+            diff_add_bg: Color::Rgb(25, 45, 30),
+            diff_remove_bg: Color::Rgb(55, 25, 30),
+            assistant_marker: Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            user_role_label: Style::default().fg(mauve).add_modifier(Modifier::BOLD),
+            assistant_role_label: Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            message_separator: Style::default().fg(Color::Rgb(45, 47, 65)),
         }
     }
 
@@ -285,6 +297,12 @@ impl Theme {
             subagent_header: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             subagent_done: Style::default().fg(green),
             subagent_working: Style::default().fg(accent),
+            diff_add_bg: Color::Rgb(220, 245, 220),
+            diff_remove_bg: Color::Rgb(255, 225, 225),
+            assistant_marker: Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            user_role_label: Style::default().fg(mauve).add_modifier(Modifier::BOLD),
+            assistant_role_label: Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            message_separator: Style::default().fg(Color::Rgb(195, 200, 212)),
         }
     }
 
@@ -364,6 +382,12 @@ impl Theme {
             subagent_header: bold,
             subagent_done: bold,
             subagent_working: dim,
+            diff_add_bg: Color::Reset,
+            diff_remove_bg: Color::Reset,
+            assistant_marker: bold,
+            user_role_label: bold,
+            assistant_role_label: Style::default(),
+            message_separator: dim,
         }
     }
 }

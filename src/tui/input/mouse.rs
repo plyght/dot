@@ -314,6 +314,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                     let visual_row = app.scroll_offset + content_row;
                     let on_tool = try_tool_at_row(app, visual_row)
                         .or_else(|| try_tool_at_row(app, visual_row.saturating_sub(1)))
+                        .or_else(|| try_tool_at_row(app, visual_row + 1))
                         .is_some();
                     if !on_tool {
                         let content_col = col
@@ -354,9 +355,17 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                     let content_row = (row - content_y) as u32;
                     let visual_row = app.scroll_offset + content_row;
                     let tool = try_tool_at_row(app, visual_row)
-                        .or_else(|| try_tool_at_row(app, visual_row.saturating_sub(1)));
+                        .or_else(|| try_tool_at_row(app, visual_row.saturating_sub(1)))
+                        .or_else(|| try_tool_at_row(app, visual_row + 1));
                     if let Some((msg_idx, tool_idx)) = tool {
                         app.selection.clear();
+                        if tool_idx == usize::MAX {
+                            app.thinking_expanded = !app.thinking_expanded;
+                            app.thinking_collapse_at = None;
+                            app.auto_opened_thinking = false;
+                            app.mark_dirty();
+                            return InputAction::None;
+                        }
                         if app.expanded_tool_calls.contains(&(msg_idx, tool_idx)) {
                             app.expanded_tool_calls.remove(&(msg_idx, tool_idx));
                         } else {

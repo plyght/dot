@@ -334,6 +334,8 @@ pub struct App {
 
     pub thinking_expanded: bool,
     pub thinking_budget: u32,
+    pub auto_opened_thinking: bool,
+    pub thinking_collapse_at: Option<Instant>,
     pub last_escape_time: Option<Instant>,
     pub follow_bottom: bool,
 
@@ -432,6 +434,8 @@ impl App {
             streaming_started: None,
             thinking_expanded: false,
             thinking_budget: 0,
+            auto_opened_thinking: false,
+            thinking_collapse_at: None,
             last_escape_time: None,
             follow_bottom: true,
             paste_blocks: Vec::new(),
@@ -500,7 +504,12 @@ impl App {
                 self.mark_dirty();
             }
             AgentEvent::ThinkingDelta(text) => {
+                let was_empty = self.current_thinking.is_empty();
                 self.current_thinking.push_str(&text);
+                if was_empty {
+                    self.thinking_expanded = true;
+                    self.auto_opened_thinking = true;
+                }
                 self.mark_dirty();
             }
             AgentEvent::TextComplete(text) => {
@@ -551,6 +560,10 @@ impl App {
                 self.streaming_segments.clear();
                 self.is_streaming = false;
                 self.streaming_started = None;
+                if self.auto_opened_thinking {
+                    self.thinking_collapse_at =
+                        Some(Instant::now() + std::time::Duration::from_secs(4));
+                }
                 self.scroll_to_bottom();
             }
             AgentEvent::ToolCallStart { name, .. } => {
@@ -590,9 +603,22 @@ impl App {
                     category,
                     detail,
                 };
+                let should_auto_expand = matches!(
+                    display.category,
+                    ToolCategory::MultiEdit | ToolCategory::Patch | ToolCategory::FileWrite
+                );
+                let tool_idx = self
+                    .streaming_segments
+                    .iter()
+                    .filter(|s| matches!(s, StreamSegment::ToolCall(_)))
+                    .count();
                 self.current_tool_calls.push(display.clone());
                 self.streaming_segments
                     .push(StreamSegment::ToolCall(display));
+                if should_auto_expand {
+                    let stream_msg_idx = self.messages.len();
+                    self.expanded_tool_calls.insert((stream_msg_idx, tool_idx));
+                }
                 self.pending_tool_name = None;
                 self.mark_dirty();
             }
@@ -1049,6 +1075,33 @@ impl App {
         self.cursor_pos = start + len;
     }
 
+    pub fn display_cursor_pos(&self) -> usize {
+        if self.paste_blocks.is_empty() {
+            return self.cursor_pos;
+        }
+        let mut sorted: Vec<&PasteBlock> = self.paste_blocks.iter().collect();
+        sorted.sort_by_key(|pb| pb.start);
+        let cursor = self.cursor_pos;
+        let mut raw_pos = 0usize;
+        let mut display_pos = 0usize;
+        for pb in &sorted {
+            if cursor <= pb.start {
+                display_pos += cursor - raw_pos;
+                return display_pos;
+            }
+            display_pos += pb.start - raw_pos;
+            let marker_len = format!("[pasted {} lines]", pb.line_count).len();
+            if cursor <= pb.end {
+                display_pos += marker_len;
+                return display_pos;
+            }
+            display_pos += marker_len;
+            raw_pos = pb.end;
+        }
+        display_pos += cursor - raw_pos;
+        display_pos
+    }
+
     pub fn display_input(&self) -> String {
         if self.paste_blocks.is_empty() {
             return self.input.clone();
@@ -1126,6 +1179,8 @@ impl App {
         self.message_queue.clear();
         self.render_cache = None;
         self.tool_call_complete_ticks.clear();
+        self.auto_opened_thinking = false;
+        self.thinking_collapse_at = None;
         self.mark_dirty();
     }
 

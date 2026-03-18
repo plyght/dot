@@ -273,21 +273,22 @@ pub fn draw_command_palette(frame: &mut Frame, app: &mut App, input_area: Rect) 
     frame.render_widget(Paragraph::new(cmd_lines), inner);
 }
 
-pub fn draw_empty_state(app: &App, width: u16) -> Vec<Line<'static>> {
+pub fn draw_empty_state(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
     let dim = app.theme.dim;
     let compact = width < 55;
 
     if compact {
-        return vec![
-            Line::from(""),
-            Line::from(""),
+        let content: Vec<Line<'static>> = vec![
             Line::from(vec![
                 Span::raw("  \u{25c6} "),
                 Span::styled("dot", Style::default().add_modifier(Modifier::BOLD)),
             ]),
             Line::from(Span::styled("  type a message to begin", dim)),
-            Line::from(""),
         ];
+        let top = (height as usize).saturating_sub(content.len()) / 2;
+        let mut lines: Vec<Line<'static>> = (0..top).map(|_| Line::from("")).collect();
+        lines.extend(content);
+        return lines;
     }
 
     let art = [
@@ -303,7 +304,9 @@ pub fn draw_empty_state(app: &App, width: u16) -> Vec<Line<'static>> {
     let sep = "\u{2500}".repeat(7);
     let hints = "/help \u{00b7} /model \u{00b7} /sessions";
 
-    let mut lines = vec![Line::from(""), Line::from(""), Line::from("")];
+    let content_height = art.len() + 7;
+    let top = (height as usize).saturating_sub(content_height) / 2;
+    let mut lines: Vec<Line<'static>> = (0..top).map(|_| Line::from("")).collect();
 
     for a in &art {
         lines.push(Line::from(Span::styled(*a, dim)).alignment(Alignment::Center));

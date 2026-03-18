@@ -180,7 +180,8 @@ fn render_tool_calls_inner(
                 ltt.push(Some((ctx.msg_idx, ctx.tool_idx_base + tool_idx)));
             }
 
-            render_expanded_output(tc, ctx, lines, &mut line_to_tool);
+            let key = Some((ctx.msg_idx, ctx.tool_idx_base + tool_idx));
+            render_expanded_output(tc, ctx, lines, &mut line_to_tool, key);
         } else {
             let label = tc.category.label();
             let detail = collapsed_detail(tc);
@@ -229,6 +230,7 @@ fn render_expanded_output(
     ctx: &ToolCallsRenderCtx<'_>,
     lines: &mut Vec<Line<'static>>,
     line_to_tool: &mut Option<&mut Vec<Option<(usize, usize)>>>,
+    tool_key: Option<(usize, usize)>,
 ) {
     let compact = ctx.compact;
     let indent: &str = if compact { "  " } else { "    " };
@@ -237,7 +239,7 @@ fn render_expanded_output(
 
     if code_width < 10 {
         if let Some(ref output) = tc.output {
-            render_plain_output(output, indent, ctx, lines, line_to_tool);
+            render_plain_output(output, indent, ctx, lines, line_to_tool, tool_key);
         }
         return;
     }
@@ -257,7 +259,7 @@ fn render_expanded_output(
         padded.extend(line.spans);
         lines.push(Line::from(padded));
         if let Some(ltt) = line_to_tool {
-            ltt.push(None);
+            ltt.push(tool_key);
         }
     }
 }
@@ -301,6 +303,7 @@ fn render_plain_output(
     ctx: &ToolCallsRenderCtx<'_>,
     lines: &mut Vec<Line<'static>>,
     line_to_tool: &mut Option<&mut Vec<Option<(usize, usize)>>>,
+    tool_key: Option<(usize, usize)>,
 ) {
     let style = if output.is_empty() {
         return;
@@ -311,7 +314,7 @@ fn render_plain_output(
     for ol in output.lines() {
         lines.push(Line::from(Span::styled(format!("{}{}", indent, ol), style)));
         if let Some(ltt) = line_to_tool {
-            ltt.push(None);
+            ltt.push(tool_key);
         }
     }
 }
@@ -341,8 +344,17 @@ fn generate_edit_diff(input: &str) -> Option<String> {
     for (i, edit) in edits.iter().enumerate() {
         let old = edit.get("old_text").and_then(|v| v.as_str()).unwrap_or("");
         let new = edit.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
+        let old_count = old.lines().count();
+        let new_count = new.lines().count();
         if edits.len() > 1 {
-            diff.push_str(&format!("@@ edit {} @@\n", i + 1));
+            diff.push_str(&format!(
+                "@@ edit {} \u{2014} -{} +{} @@\n",
+                i + 1,
+                old_count,
+                new_count
+            ));
+        } else {
+            diff.push_str(&format!("@@ -{} +{} @@\n", old_count, new_count));
         }
         for line in old.lines() {
             diff.push('-');
@@ -499,30 +511,35 @@ pub fn render_streaming_state(
         let idx = (app.tick_count / 8 % frames.len() as u64) as usize;
         let intent = category.intent();
 
+        let cat_style = tool_category_style(&category, &app.theme);
         let mut tool_spans = vec![
             Span::raw(pad.to_string()),
-            Span::raw(format!("{} {} ", frames[idx], intent)),
+            Span::styled(format!("{} ", frames[idx]), cat_style),
+            Span::styled(format!("{} ", intent), cat_style),
         ];
 
         if !detail.is_empty() {
             match &category {
                 ToolCategory::Command => {
-                    tool_spans.push(Span::raw(format!("$ {}", detail)));
+                    tool_spans.push(Span::styled(
+                        format!("$ {}", detail),
+                        Style::default().fg(app.theme.muted_fg),
+                    ));
                 }
                 ToolCategory::Mcp { .. } => {
                     let mcp_tool = tool_name.split('_').skip(1).collect::<Vec<_>>().join("_");
                     if !mcp_tool.is_empty() {
-                        tool_spans.push(Span::raw(mcp_tool));
+                        tool_spans.push(Span::styled(mcp_tool, app.theme.tool_name));
                         tool_spans.push(Span::raw(" "));
                     }
-                    tool_spans.push(Span::raw(detail));
+                    tool_spans.push(Span::styled(detail, app.theme.dim));
                 }
                 _ => {
-                    tool_spans.push(Span::raw(detail));
+                    tool_spans.push(Span::styled(detail, app.theme.tool_path));
                 }
             }
         } else {
-            tool_spans.push(Span::raw(tool_name.to_string()));
+            tool_spans.push(Span::styled(tool_name.to_string(), app.theme.tool_name));
         }
 
         if let Some(ref sub) = app.active_subagent {
@@ -600,17 +617,29 @@ pub fn render_streaming_state(
         line_to_tool.push(None);
         if has_live_thinking && app.thinking_expanded {
             let thinking = app.current_thinking.clone();
+            let prefix = format!("{}\u{2502} ", pad);
+            let prefix_chars = prefix.chars().count();
+            let content_width = (width as usize).saturating_sub(prefix_chars);
+            let thinking_style = ratatui::style::Style::default()
+                .fg(app.theme.muted_fg)
+                .add_modifier(ratatui::style::Modifier::ITALIC);
             for text_line in thinking.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{}\u{2502} ", pad), app.theme.thinking),
-                    Span::styled(
-                        text_line.to_string(),
-                        ratatui::style::Style::default()
-                            .fg(app.theme.muted_fg)
-                            .add_modifier(ratatui::style::Modifier::ITALIC),
-                    ),
-                ]));
-                line_to_tool.push(None);
+                let chars: Vec<char> = text_line.chars().collect();
+                if content_width == 0 || chars.len() <= content_width {
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix.clone(), app.theme.thinking),
+                        Span::styled(text_line.to_string(), thinking_style),
+                    ]));
+                    line_to_tool.push(None);
+                } else {
+                    for chunk in chars.chunks(content_width) {
+                        lines.push(Line::from(vec![
+                            Span::styled(prefix.clone(), app.theme.thinking),
+                            Span::styled(chunk.iter().collect::<String>(), thinking_style),
+                        ]));
+                        line_to_tool.push(None);
+                    }
+                }
             }
         }
     }

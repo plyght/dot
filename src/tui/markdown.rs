@@ -273,19 +273,36 @@ pub fn render_code_block(
     if is_diff {
         for raw_line in code_lines {
             let line = &truncate_code_line(raw_line, w.saturating_sub(3));
-            let diff_style = if line.starts_with('+') {
-                theme.diff_add
+            let (prefix_char, diff_style, bg_color) = if line.starts_with('+') {
+                ("+", theme.diff_add, Some(theme.diff_add_bg))
             } else if line.starts_with('-') {
-                theme.diff_remove
+                ("-", theme.diff_remove, Some(theme.diff_remove_bg))
             } else if line.starts_with('@') {
-                theme.diff_hunk
+                ("@", theme.diff_hunk, None)
             } else {
-                Style::default().fg(theme.fg)
+                (" ", Style::default().fg(theme.fg), None)
             };
-            output.push(Line::from(vec![
+            let gutter_style = if let Some(bg) = bg_color {
+                diff_style.bg(bg)
+            } else {
+                diff_style
+            };
+            let content_style = if let Some(bg) = bg_color {
+                diff_style.bg(bg)
+            } else {
+                diff_style
+            };
+            let content_text = if line.len() > 1 { &line[1..] } else { "" };
+            let pad_needed = w.saturating_sub(3 + 2 + content_text.chars().count());
+            let mut spans = vec![
                 Span::styled(" │ ", theme.border),
-                Span::styled(line.to_string(), diff_style),
-            ]));
+                Span::styled(format!("{} ", prefix_char), gutter_style),
+                Span::styled(content_text.to_string(), content_style),
+            ];
+            if bg_color.is_some() && pad_needed > 0 {
+                spans.push(Span::styled(" ".repeat(pad_needed), content_style));
+            }
+            output.push(Line::from(spans));
         }
         if code_lines.is_empty() {
             output.push(Line::from(Span::styled(" │", theme.border)));
