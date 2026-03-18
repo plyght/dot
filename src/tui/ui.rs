@@ -223,29 +223,60 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         app.render_dirty || app.render_cache.as_ref().map(|c| c.width) != Some(content_width);
 
     if need_rebuild {
-        let mut all_lines: Vec<Line<'static>> = Vec::new();
-        let mut line_to_msg: Vec<usize> = Vec::new();
-        let mut line_to_tool: Vec<Option<(usize, usize)>> = Vec::new();
+        let msg_count = app.messages.len();
+        let can_reuse_msg_cache = app.message_cache.as_ref().is_some_and(|mc| {
+            mc.width == content_width
+                && mc.message_count == msg_count
+                && mc.expanded_snapshot == app.expanded_tool_calls
+                && mc.thinking_expanded == app.thinking_expanded
+        });
 
-        for (msg_idx, msg) in app.messages.iter().enumerate() {
-            let before = all_lines.len();
-            render_message(
-                msg,
-                msg_idx,
-                &MessageRenderCtx {
-                    theme: &app.theme,
-                    thinking_expanded: app.thinking_expanded,
-                    inner_width: wrap_width,
-                    expanded_tool_calls: &app.expanded_tool_calls,
-                },
-                &mut all_lines,
-                &mut line_to_tool,
-            );
-            let after = all_lines.len();
-            for _ in before..after {
-                line_to_msg.push(msg_idx);
+        let (mut all_lines, mut line_to_msg, mut line_to_tool) = if can_reuse_msg_cache {
+            let mc = app.message_cache.as_ref().unwrap();
+            (
+                mc.lines.clone(),
+                mc.line_to_msg.clone(),
+                mc.line_to_tool.clone(),
+            )
+        } else {
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            let mut ltm: Vec<usize> = Vec::new();
+            let mut ltt: Vec<Option<(usize, usize)>> = Vec::new();
+
+            for (msg_idx, msg) in app.messages.iter().enumerate() {
+                let before = lines.len();
+                render_message(
+                    msg,
+                    msg_idx,
+                    &MessageRenderCtx {
+                        theme: &app.theme,
+                        thinking_expanded: app.thinking_expanded,
+                        inner_width: wrap_width,
+                        expanded_tool_calls: &app.expanded_tool_calls,
+                    },
+                    &mut lines,
+                    &mut ltt,
+                );
+                let after = lines.len();
+                for _ in before..after {
+                    ltm.push(msg_idx);
+                }
             }
-        }
+
+            let (lines, ltm, ltt) = pre_wrap_lines(lines, ltm, ltt, wrap_width);
+
+            app.message_cache = Some(crate::tui::app::MessageCache {
+                lines: lines.clone(),
+                line_to_msg: ltm.clone(),
+                line_to_tool: ltt.clone(),
+                message_count: msg_count,
+                width: content_width,
+                expanded_snapshot: app.expanded_tool_calls.clone(),
+                thinking_expanded: app.thinking_expanded,
+            });
+
+            (lines, ltm, ltt)
+        };
 
         if !app.todos.is_empty() {
             let pad = if inner.width < 55 { "  " } else { "    " };
@@ -283,8 +314,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             line_to_tool.push(None);
         }
 
+        let tail_start = all_lines.len();
+
         if app.is_streaming {
-            let before_stream = all_lines.len();
             let stream_msg_idx = app.messages.len();
             ui_tools::render_streaming_state(
                 app,
@@ -293,7 +325,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 &mut line_to_tool,
                 stream_msg_idx,
             );
-            for _ in before_stream..all_lines.len() {
+            let added = all_lines.len() - tail_start;
+            for _ in 0..added {
                 line_to_msg.push(stream_msg_idx);
             }
         }
@@ -308,25 +341,36 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             all_lines.push(Line::from(""));
             line_to_tool.push(None);
+            line_to_msg.push(app.messages.len().saturating_sub(1));
             all_lines.push(Line::from(vec![
                 Span::styled(format!("    {} ", icon), style),
                 Span::styled(status.text.clone(), style),
             ]));
             line_to_tool.push(None);
+            line_to_msg.push(app.messages.len().saturating_sub(1));
         }
 
         if all_lines.is_empty() {
             let empty_lines = ui_popups::draw_empty_state(app, inner.width, inner.height);
             for _ in &empty_lines {
                 line_to_tool.push(None);
+                line_to_msg.push(0);
             }
             all_lines.extend(empty_lines);
         }
 
-        let (all_lines, line_to_msg, line_to_tool) =
-            pre_wrap_lines(all_lines, line_to_msg, line_to_tool, wrap_width);
+        if tail_start < all_lines.len() {
+            let tail_lines = all_lines.split_off(tail_start);
+            let tail_msg = line_to_msg.split_off(tail_start);
+            let tail_tool = line_to_tool.split_off(tail_start);
+            let (wrapped_tail, wrapped_msg, wrapped_tool) =
+                pre_wrap_lines(tail_lines, tail_msg, tail_tool, wrap_width);
+            all_lines.extend(wrapped_tail);
+            line_to_msg.extend(wrapped_msg);
+            line_to_tool.extend(wrapped_tool);
+        }
+
         let total_visual = all_lines.len() as u32;
-        let wrap_heights: Vec<u32> = vec![1; all_lines.len()];
 
         app.content_width = content_width;
         app.message_line_map.clone_from(&line_to_msg);
@@ -338,7 +382,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             line_to_tool,
             total_visual,
             width: content_width,
-            wrap_heights,
+            wrap_heights: Vec::new(),
         });
         app.render_dirty = false;
     }

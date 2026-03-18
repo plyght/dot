@@ -300,6 +300,16 @@ pub struct RenderCache {
     pub wrap_heights: Vec<u32>,
 }
 
+pub struct MessageCache {
+    pub lines: Vec<Line<'static>>,
+    pub line_to_msg: Vec<usize>,
+    pub line_to_tool: Vec<Option<(usize, usize)>>,
+    pub message_count: usize,
+    pub width: u16,
+    pub expanded_snapshot: HashSet<(usize, usize)>,
+    pub thinking_expanded: bool,
+}
+
 pub struct App {
     pub messages: Vec<ChatMessage>,
     pub input: String,
@@ -378,6 +388,7 @@ pub struct App {
 
     pub render_dirty: bool,
     pub render_cache: Option<RenderCache>,
+    pub message_cache: Option<MessageCache>,
     pub tool_call_complete_ticks: HashMap<(usize, usize), u64>,
     pub input_at_top: bool,
 
@@ -473,6 +484,7 @@ impl App {
             background_subagents: Vec::new(),
             render_dirty: true,
             render_cache: None,
+            message_cache: None,
             tool_call_complete_ticks: HashMap::new(),
             input_at_top: false,
             cached_model_groups: None,
@@ -657,6 +669,7 @@ impl App {
                         "\u{26a1} compacted \u{2014} {} messages summarized",
                         messages_removed
                     );
+                    self.message_cache = None;
                 }
             }
             AgentEvent::TodoUpdate(items) => {
@@ -1186,6 +1199,7 @@ impl App {
         self.background_subagents.clear();
         self.message_queue.clear();
         self.render_cache = None;
+        self.message_cache = None;
         self.tool_call_complete_ticks.clear();
         self.auto_opened_thinking = false;
         self.thinking_collapse_at = None;

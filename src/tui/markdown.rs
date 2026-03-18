@@ -264,7 +264,7 @@ pub fn render_code_block(
 
     if !lang.is_empty() {
         output.push(Line::from(vec![
-            Span::styled(" │ ", theme.border),
+            Span::styled("│ ", theme.border),
             Span::styled(lang.to_string(), Style::default().fg(theme.muted_fg)),
         ]));
     }
@@ -272,7 +272,7 @@ pub fn render_code_block(
     let is_diff = lang == "diff" || lang == "patch";
     if is_diff {
         for raw_line in code_lines {
-            let line = &truncate_code_line(raw_line, w.saturating_sub(3));
+            let line = &truncate_code_line(raw_line, w.saturating_sub(2));
             let (prefix_char, diff_style, bg_color) = if line.starts_with('+') {
                 ("+", theme.diff_add, Some(theme.diff_add_bg))
             } else if line.starts_with('-') {
@@ -293,9 +293,9 @@ pub fn render_code_block(
                 diff_style
             };
             let content_text = if line.len() > 1 { &line[1..] } else { "" };
-            let pad_needed = w.saturating_sub(3 + 2 + content_text.chars().count());
+            let pad_needed = w.saturating_sub(2 + 2 + content_text.chars().count());
             let mut spans = vec![
-                Span::styled(" │ ", theme.border),
+                Span::styled("│ ", theme.border),
                 Span::styled(format!("{} ", prefix_char), gutter_style),
                 Span::styled(content_text.to_string(), content_style),
             ];
@@ -305,7 +305,7 @@ pub fn render_code_block(
             output.push(Line::from(spans));
         }
         if code_lines.is_empty() {
-            output.push(Line::from(Span::styled(" │", theme.border)));
+            output.push(Line::from(Span::styled("│", theme.border)));
         }
     } else if let Some(syntect_theme_name) = theme.syntect_theme
         && !lang.is_empty()
@@ -314,11 +314,11 @@ pub fn render_code_block(
     {
         let mut highlighter = syntect::easy::HighlightLines::new(syntax, st_theme);
         for raw_line in code_lines {
-            let line: &str = &truncate_code_line(raw_line, w.saturating_sub(3));
+            let line: &str = &truncate_code_line(raw_line, w.saturating_sub(2));
             let highlighted = highlighter.highlight_line(line, &SYNTAX_SET);
             match highlighted {
                 Ok(ranges) => {
-                    let mut spans = vec![Span::styled(" │ ", theme.border)];
+                    let mut spans = vec![Span::styled("│ ", theme.border)];
                     for (style, text) in ranges {
                         let fg = style.foreground;
                         let clean = text.trim_end_matches('\n');
@@ -334,14 +334,14 @@ pub fn render_code_block(
                 }
                 Err(_) => {
                     output.push(Line::from(vec![
-                        Span::styled(" │ ", theme.border),
+                        Span::styled("│ ", theme.border),
                         Span::styled(line.to_string(), Style::default().fg(theme.fg)),
                     ]));
                 }
             }
         }
         if code_lines.is_empty() {
-            output.push(Line::from(Span::styled(" │", theme.border)));
+            output.push(Line::from(Span::styled("│", theme.border)));
         }
     } else if let Some(styles) = &theme.syntax
         && !lang.is_empty()
@@ -350,10 +350,10 @@ pub fn render_code_block(
         let mut state = ParseState::new(syntax);
         let mut stack = ScopeStack::new();
         for raw_line in code_lines {
-            let line = &truncate_code_line(raw_line, w.saturating_sub(3));
+            let line = &truncate_code_line(raw_line, w.saturating_sub(2));
             match state.parse_line(line, &SYNTAX_SET) {
                 Ok(ops) => {
-                    let mut spans = vec![Span::styled(" │ ", theme.border)];
+                    let mut spans = vec![Span::styled("│ ", theme.border)];
                     let mut prev = 0;
                     for (pos, op) in &ops {
                         let pos = (*pos).min(line.len());
@@ -378,25 +378,25 @@ pub fn render_code_block(
                 }
                 Err(_) => {
                     output.push(Line::from(vec![
-                        Span::styled(" │ ", theme.border),
+                        Span::styled("│ ", theme.border),
                         Span::styled(line.to_string(), Style::default().fg(theme.fg)),
                     ]));
                 }
             }
         }
         if code_lines.is_empty() {
-            output.push(Line::from(Span::styled(" │", theme.border)));
+            output.push(Line::from(Span::styled("│", theme.border)));
         }
     } else {
         for raw_line in code_lines {
-            let line = &truncate_code_line(raw_line, w.saturating_sub(3));
+            let line = &truncate_code_line(raw_line, w.saturating_sub(2));
             output.push(Line::from(vec![
-                Span::styled(" │ ", theme.border),
+                Span::styled("│ ", theme.border),
                 Span::styled(line.to_string(), Style::default().fg(theme.fg)),
             ]));
         }
         if code_lines.is_empty() {
-            output.push(Line::from(Span::styled(" │", theme.border)));
+            output.push(Line::from(Span::styled("│", theme.border)));
         }
     }
 

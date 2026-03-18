@@ -579,15 +579,37 @@ pub fn render_streaming_state(
             tool_spans.push(Span::styled(format!(" \u{00b7} {} done", n), app.theme.dim));
         }
 
-        let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
         let mut right_spans: Vec<Span<'static>> = Vec::new();
         if let Some(elapsed) = app.streaming_elapsed_secs() {
             right_spans.push(Span::styled(
-                format!(" \u{00b7} {}", super::ui::format_elapsed(elapsed)),
+                format!(" {}", super::ui::format_elapsed(elapsed)),
                 app.theme.dim,
             ));
         }
         let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
+        let max_left = (width as usize).saturating_sub(right_width + 1);
+        let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
+        if left_width > max_left && max_left > 4 {
+            let mut used = 0usize;
+            let mut truncated: Vec<Span<'static>> = Vec::new();
+            for span in tool_spans {
+                let chars: Vec<char> = span.content.chars().collect();
+                if used + chars.len() <= max_left {
+                    used += chars.len();
+                    truncated.push(span);
+                } else {
+                    let take = max_left.saturating_sub(used + 1);
+                    if take > 0 {
+                        let s: String = chars.into_iter().take(take).collect();
+                        let _ = used + take + 1;
+                        truncated.push(Span::styled(format!("{}\u{2026}", s), span.style));
+                    }
+                    break;
+                }
+            }
+            tool_spans = truncated;
+        }
+        let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
         let padding = (width as usize).saturating_sub(left_width + right_width);
         tool_spans.push(Span::raw(" ".repeat(padding)));
         tool_spans.extend(right_spans);
