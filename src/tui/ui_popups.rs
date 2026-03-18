@@ -29,13 +29,33 @@ fn centered_popup(area: Rect, content_width: usize, content_height: usize) -> Re
     Rect::new(x, y, width, height)
 }
 
+fn popup_rect(area: Rect) -> Rect {
+    let w = (((area.width as u32) * 60 / 100).max(40).min(72)) as u16;
+    let w = w.min(area.width.saturating_sub(4));
+    let h = (((area.height as u32) * 55 / 100).max(10)) as u16;
+    let h = h.min(area.height.saturating_sub(4));
+    let x = area.width.saturating_sub(w) / 2;
+    let y = area.height.saturating_sub(h) / 2;
+    Rect::new(x, y, w, h)
+}
+
 pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
     let sel = &app.model_selector;
     if sel.filtered.is_empty() && sel.query.is_empty() {
         return;
     }
 
+    let popup = popup_rect(frame.area());
+    app.layout.model_selector = Some(popup);
+
+    frame.render_widget(Clear, popup);
+
+    let block = popup_block("model", app.theme.accent, app.theme.muted_fg);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
     let mut content_lines: Vec<Line<'static>> = Vec::new();
+    let mut selected_line: usize = 0;
     let mut last_provider: Option<&str> = None;
 
     for (item_idx, &entry_idx) in sel.filtered.iter().enumerate() {
@@ -55,6 +75,10 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
         let _is_current =
             entry.provider == sel.current_provider && entry.model == sel.current_model;
         let is_sel = item_idx == sel.selected;
+
+        if is_sel {
+            selected_line = content_lines.len();
+        }
 
         let prefix = if is_sel { "\u{203a} " } else { "  " };
         let marker_style = if is_sel {
@@ -84,28 +108,14 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
         content_lines.push(Line::from(Span::styled(" no matches", app.theme.dim)));
     }
 
-    let search_line = format!(" /{}", sel.query);
     let footer = "\u{2191}\u{2193} select  enter confirm  s/* favorite  esc cancel";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(20)
-        .max(footer.len() + 2)
-        .max(search_line.len())
-        + 4;
-    let content_height = content_lines.len() + 4;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
-    app.layout.model_selector = Some(popup);
-
-    frame.render_widget(Clear, popup);
-
-    let block = popup_block("model", app.theme.accent, app.theme.muted_fg);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    let items_visible = (inner.height as usize).saturating_sub(4);
+    let scroll = if selected_line >= items_visible {
+        selected_line.saturating_sub(items_visible) + 1
+    } else {
+        0
+    };
 
     let search_display = if sel.query.is_empty() {
         Line::from(Span::styled(" type to filter\u{2026}", app.theme.dim))
@@ -116,9 +126,11 @@ pub fn draw_model_selector(frame: &mut Frame, app: &mut App) {
             Span::styled("\u{258f}", Style::default()),
         ])
     };
+
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
     all_lines.push(search_display);
     all_lines.push(Line::from(""));
-    all_lines.extend(content_lines);
+    all_lines.extend(content_lines.into_iter().skip(scroll).take(items_visible));
     all_lines.push(Line::from(""));
     all_lines.push(Line::from(Span::styled(
         format!(" {}", footer),
@@ -158,16 +170,8 @@ pub fn draw_agent_selector(frame: &mut Frame, app: &mut App) {
     }
 
     let footer = "\u{2191}\u{2193} select  enter confirm  esc cancel";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(20)
-        .max(footer.len() + 2)
-        + 4;
-    let content_height = content_lines.len() + 3;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
+    let popup = popup_rect(frame.area());
     app.layout.agent_selector = Some(popup);
 
     frame.render_widget(Clear, popup);
@@ -358,16 +362,8 @@ pub fn draw_thinking_selector(frame: &mut Frame, app: &mut App) {
     }
 
     let footer = "\u{2191}\u{2193} select  enter confirm  esc cancel";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(20)
-        .max(footer.len() + 2)
-        + 4;
-    let content_height = content_lines.len() + 3;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
+    let popup = popup_rect(frame.area());
     app.layout.thinking_selector = Some(popup);
 
     frame.render_widget(Clear, popup);
@@ -457,16 +453,8 @@ pub fn draw_help_popup(frame: &mut Frame, app: &mut App) {
     }
 
     let footer = "esc close";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(30)
-        .max(footer.len() + 2)
-        + 4;
-    let content_height = content_lines.len() + 3;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
+    let popup = popup_rect(frame.area());
     app.layout.help_popup = Some(popup);
 
     frame.render_widget(Clear, popup);
@@ -491,6 +479,15 @@ pub fn draw_session_selector(frame: &mut Frame, app: &mut App) {
     if !sel.visible {
         return;
     }
+
+    let popup = popup_rect(frame.area());
+    app.layout.session_selector = Some(popup);
+
+    frame.render_widget(Clear, popup);
+
+    let block = popup_block("sessions", app.theme.accent, app.theme.muted_fg);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
 
     let mut content_lines: Vec<Line<'static>> = Vec::new();
 
@@ -523,23 +520,13 @@ pub fn draw_session_selector(frame: &mut Frame, app: &mut App) {
     }
 
     let footer = "\u{2191}\u{2193} select  enter resume  esc cancel";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(30)
-        .max(footer.len() + 2)
-        + 4;
-    let content_height = content_lines.len() + 4;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
-    app.layout.session_selector = Some(popup);
-
-    frame.render_widget(Clear, popup);
-
-    let block = popup_block("sessions", app.theme.accent, app.theme.muted_fg);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let items_visible = (inner.height as usize).saturating_sub(4);
+    let scroll = if sel.selected >= items_visible {
+        sel.selected.saturating_sub(items_visible) + 1
+    } else {
+        0
+    };
 
     let search_display = if sel.query.is_empty() {
         Line::from(Span::styled(" type to filter\u{2026}", app.theme.dim))
@@ -554,7 +541,7 @@ pub fn draw_session_selector(frame: &mut Frame, app: &mut App) {
     let mut all_lines: Vec<Line<'static>> = Vec::new();
     all_lines.push(search_display);
     all_lines.push(Line::from(""));
-    all_lines.extend(content_lines);
+    all_lines.extend(content_lines.into_iter().skip(scroll).take(items_visible));
     all_lines.push(Line::from(""));
     all_lines.push(Line::from(Span::styled(
         format!(" {}", footer),
@@ -657,16 +644,8 @@ pub fn draw_question_popup(frame: &mut Frame, app: &mut App) {
     ]));
 
     let footer = "\u{2191}\u{2193} select  enter confirm  esc cancel";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(30)
-        .max(footer.len() + 2)
-        + 4;
-    let content_height = content_lines.len() + 3;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
+    let popup = popup_rect(frame.area());
     app.layout.question_popup = Some(popup);
 
     frame.render_widget(Clear, popup);
@@ -718,16 +697,8 @@ pub fn draw_permission_popup(frame: &mut Frame, app: &mut App) {
     }
 
     let footer = "y allow  n deny  esc cancel";
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(30)
-        .max(footer.len() + 2)
-        + 4;
-    let content_height = content_lines.len() + 3;
 
-    let popup = centered_popup(frame.area(), content_width, content_height);
+    let popup = popup_rect(frame.area());
     app.layout.permission_popup = Some(popup);
 
     frame.render_widget(Clear, popup);
@@ -754,16 +725,7 @@ pub fn draw_rename_popup(frame: &mut Frame, app: &App) {
         Span::raw(" "),
         Span::styled(display, Style::default()),
     ])];
-    let content_width = content_lines
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(20)
-        .max(footer.len() + 2)
-        .max(30)
-        + 4;
-    let content_height = content_lines.len() + 3;
-    let popup = centered_popup(frame.area(), content_width, content_height);
+    let popup = popup_rect(frame.area());
     frame.render_widget(Clear, popup);
     let block = popup_block("rename session", app.theme.accent, app.theme.muted_fg);
     let inner = block.inner(popup);
@@ -972,9 +934,7 @@ pub fn draw_login_popup(frame: &mut Frame, app: &mut App) {
         Style::default().fg(muted),
     )));
 
-    let content_height = lines.len() + 2;
-    let content_width = 48;
-    let area = centered_popup(frame.area(), content_width, content_height);
+    let area = popup_rect(frame.area());
 
     let block = popup_block(title, accent, muted);
     frame.render_widget(Clear, area);

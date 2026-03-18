@@ -310,6 +310,15 @@ pub struct MessageCache {
     pub thinking_expanded: bool,
 }
 
+pub struct SegmentCache {
+    pub lines: Vec<Line<'static>>,
+    pub line_to_tool: Vec<Option<(usize, usize)>>,
+    pub segment_count: usize,
+    pub width: u16,
+    pub prev_was_tool: bool,
+    pub tool_idx_base: usize,
+}
+
 pub struct App {
     pub messages: Vec<ChatMessage>,
     pub input: String,
@@ -389,6 +398,7 @@ pub struct App {
     pub render_dirty: bool,
     pub render_cache: Option<RenderCache>,
     pub message_cache: Option<MessageCache>,
+    pub segment_cache: Option<SegmentCache>,
     pub tool_call_complete_ticks: HashMap<(usize, usize), u64>,
     pub input_at_top: bool,
 
@@ -485,6 +495,7 @@ impl App {
             render_dirty: true,
             render_cache: None,
             message_cache: None,
+            segment_cache: None,
             tool_call_complete_ticks: HashMap::new(),
             input_at_top: false,
             cached_model_groups: None,
@@ -570,6 +581,7 @@ impl App {
                 self.current_response.clear();
                 self.current_thinking.clear();
                 self.streaming_segments.clear();
+                self.segment_cache = None;
                 self.is_streaming = false;
                 self.streaming_started = None;
                 if self.auto_opened_thinking {
@@ -1200,6 +1212,7 @@ impl App {
         self.message_queue.clear();
         self.render_cache = None;
         self.message_cache = None;
+        self.segment_cache = None;
         self.tool_call_complete_ticks.clear();
         self.auto_opened_thinking = false;
         self.thinking_collapse_at = None;

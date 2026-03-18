@@ -245,9 +245,16 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> InputAction {
                 && let Some(popup) = app.layout.command_palette
             {
                 if rect_contains(popup, col, row) {
-                    let relative_row = row.saturating_sub(popup.y) as usize;
-                    if relative_row < app.command_palette.filtered.len() {
-                        app.command_palette.selected = relative_row;
+                    let inner_h = popup.height.saturating_sub(2) as usize;
+                    let scroll = if app.command_palette.selected >= inner_h {
+                        app.command_palette.selected - inner_h + 1
+                    } else {
+                        0
+                    };
+                    let relative_row = row.saturating_sub(popup.y + 1) as usize;
+                    let idx = scroll + relative_row;
+                    if idx < app.command_palette.filtered.len() {
+                        app.command_palette.selected = idx;
                         if let Some(entry) = app.command_palette.confirm() {
                             if entry.kind == PaletteEntryKind::Skill {
                                 popups::place_skill_chip(app, &entry.name);

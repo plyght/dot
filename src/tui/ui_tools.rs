@@ -233,8 +233,8 @@ fn render_expanded_output(
     tool_key: Option<(usize, usize)>,
 ) {
     let compact = ctx.compact;
-    let indent: &str = if compact { "" } else { " " };
-    let indent_len: u16 = if compact { 0 } else { 1 };
+    let indent: &str = if compact { " " } else { "  " };
+    let indent_len: u16 = if compact { 1 } else { 2 };
     let code_width = ctx.width.saturating_sub(indent_len);
 
     if code_width < 10 {
@@ -402,7 +402,7 @@ pub fn render_streaming_state(
     lines: &mut Vec<Line<'static>>,
     line_to_tool: &mut Vec<Option<(usize, usize)>>,
     stream_msg_idx: usize,
-) {
+) -> (usize, bool, usize) {
     let compact = width < 55;
     let pad = if compact { " " } else { "  " };
     let pad_cols: u16 = if compact { 1 } else { 2 };
@@ -472,6 +472,10 @@ pub fn render_streaming_state(
         }
     }
 
+    let seg_boundary = lines.len();
+    let seg_prev_was_tool = prev_was_tool;
+    let seg_tool_idx_base = tool_idx_base;
+
     if has_text {
         if prev_was_tool {
             lines.push(Line::from(""));
@@ -500,170 +504,259 @@ pub fn render_streaming_state(
             line_to_tool.push(None);
         }
     } else if has_tool {
-        let tool_name = app.pending_tool_name.as_deref().unwrap_or("");
-        let category = ToolCategory::from_name(tool_name);
-        let detail = extract_tool_detail(tool_name, &app.pending_tool_input);
+        render_tool_in_progress(
+            app,
+            width,
+            pad,
+            has_segments,
+            lines,
+            line_to_tool,
+            stream_msg_idx,
+        );
+    } else {
+        render_waiting_dot(app, width, pad, lines, line_to_tool);
+    }
+    (seg_boundary, seg_prev_was_tool, seg_tool_idx_base)
+}
 
-        let frames = [
-            "\u{25cb}", "\u{25d4}", "\u{25d1}", "\u{25d5}", "\u{25cf}", "\u{25d5}", "\u{25d1}",
-            "\u{25d4}",
-        ];
-        let idx = (app.tick_count / 8 % frames.len() as u64) as usize;
-        let intent = category.intent();
+fn render_tool_in_progress(
+    app: &App,
+    width: u16,
+    pad: &str,
+    has_segments: bool,
+    lines: &mut Vec<Line<'static>>,
+    line_to_tool: &mut Vec<Option<(usize, usize)>>,
+    _stream_msg_idx: usize,
+) {
+    let tool_name = app.pending_tool_name.as_deref().unwrap_or("");
+    let category = ToolCategory::from_name(tool_name);
+    let detail = extract_tool_detail(tool_name, &app.pending_tool_input);
 
-        let cat_style = tool_category_style(&category, &app.theme);
-        let mut tool_spans = vec![
-            Span::raw(pad.to_string()),
-            Span::styled(format!("{} ", frames[idx]), cat_style),
-            Span::styled(format!("{} ", intent), cat_style),
-        ];
+    let frames = [
+        "\u{25cb}", "\u{25d4}", "\u{25d1}", "\u{25d5}", "\u{25cf}", "\u{25d5}", "\u{25d1}",
+        "\u{25d4}",
+    ];
+    let idx = (app.tick_count / 8 % frames.len() as u64) as usize;
+    let intent = category.intent();
 
-        if !detail.is_empty() {
-            match &category {
-                ToolCategory::Command => {
-                    tool_spans.push(Span::styled(
-                        format!("$ {}", detail),
-                        Style::default().fg(app.theme.muted_fg),
-                    ));
-                }
-                ToolCategory::Mcp { .. } => {
-                    let mcp_tool = tool_name.split('_').skip(1).collect::<Vec<_>>().join("_");
-                    if !mcp_tool.is_empty() {
-                        tool_spans.push(Span::styled(mcp_tool, app.theme.tool_name));
-                        tool_spans.push(Span::raw(" "));
-                    }
-                    tool_spans.push(Span::styled(detail, app.theme.dim));
-                }
-                _ => {
-                    tool_spans.push(Span::styled(detail, app.theme.tool_path));
-                }
-            }
-        } else {
-            tool_spans.push(Span::styled(tool_name.to_string(), app.theme.tool_name));
-        }
+    let cat_style = tool_category_style(&category, &app.theme);
+    let mut tool_spans = vec![
+        Span::raw(pad.to_string()),
+        Span::styled(format!("{} ", frames[idx]), cat_style),
+        Span::styled(format!("{} ", intent), cat_style),
+    ];
 
-        if let Some(ref sub) = app.active_subagent {
-            if let Some(ref tool) = sub.current_tool {
-                let tool_detail = sub.current_tool_detail.as_deref().unwrap_or("");
-                let label = if tool_detail.is_empty() {
-                    tool.clone()
-                } else {
-                    format!("{} {}", tool, tool_detail)
-                };
-                tool_spans.push(Span::styled(format!(" \u{00b7} {}", label), app.theme.dim));
-            }
-            let word_count = sub.output.split_whitespace().count();
-            let parts: Vec<String> = [
-                if sub.tools_completed > 0 {
-                    Some(format!("{} tools", sub.tools_completed))
-                } else {
-                    None
-                },
-                if word_count > 0 {
-                    Some(format!("{}w", word_count))
-                } else {
-                    None
-                },
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if !parts.is_empty() {
+    if !detail.is_empty() {
+        match &category {
+            ToolCategory::Command => {
                 tool_spans.push(Span::styled(
-                    format!(" \u{00b7} {}", parts.join(", ")),
-                    app.theme.dim,
+                    format!("$ {}", detail),
+                    Style::default().fg(app.theme.muted_fg),
                 ));
             }
-        } else if has_segments {
-            let n = app.current_tool_calls.len();
-            tool_spans.push(Span::styled(format!(" \u{00b7} {} done", n), app.theme.dim));
+            ToolCategory::Mcp { .. } => {
+                let mcp_tool = tool_name.split('_').skip(1).collect::<Vec<_>>().join("_");
+                if !mcp_tool.is_empty() {
+                    tool_spans.push(Span::styled(mcp_tool, app.theme.tool_name));
+                    tool_spans.push(Span::raw(" "));
+                }
+                tool_spans.push(Span::styled(detail, app.theme.dim));
+            }
+            _ => {
+                tool_spans.push(Span::styled(detail, app.theme.tool_path));
+            }
         }
+    } else {
+        tool_spans.push(Span::styled(tool_name.to_string(), app.theme.tool_name));
+    }
 
-        let mut right_spans: Vec<Span<'static>> = Vec::new();
-        if let Some(elapsed) = app.streaming_elapsed_secs() {
-            right_spans.push(Span::styled(
-                format!(" {}", super::ui::format_elapsed(elapsed)),
+    if let Some(ref sub) = app.active_subagent {
+        if let Some(ref tool) = sub.current_tool {
+            let tool_detail = sub.current_tool_detail.as_deref().unwrap_or("");
+            let label = if tool_detail.is_empty() {
+                tool.clone()
+            } else {
+                format!("{} {}", tool, tool_detail)
+            };
+            tool_spans.push(Span::styled(format!(" \u{00b7} {}", label), app.theme.dim));
+        }
+        let word_count = sub.output.split_whitespace().count();
+        let parts: Vec<String> = [
+            if sub.tools_completed > 0 {
+                Some(format!("{} tools", sub.tools_completed))
+            } else {
+                None
+            },
+            if word_count > 0 {
+                Some(format!("{}w", word_count))
+            } else {
+                None
+            },
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !parts.is_empty() {
+            tool_spans.push(Span::styled(
+                format!(" \u{00b7} {}", parts.join(", ")),
                 app.theme.dim,
             ));
         }
-        let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
-        let max_left = (width as usize).saturating_sub(right_width + 1);
-        let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
-        if left_width > max_left && max_left > 4 {
-            let mut used = 0usize;
-            let mut truncated: Vec<Span<'static>> = Vec::new();
-            for span in tool_spans {
-                let chars: Vec<char> = span.content.chars().collect();
-                if used + chars.len() <= max_left {
-                    used += chars.len();
-                    truncated.push(span);
-                } else {
-                    let take = max_left.saturating_sub(used + 1);
-                    if take > 0 {
-                        let s: String = chars.into_iter().take(take).collect();
-                        let _ = used + take + 1;
-                        truncated.push(Span::styled(format!("{}\u{2026}", s), span.style));
-                    }
-                    break;
-                }
-            }
-            tool_spans = truncated;
-        }
-        let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
-        let padding = (width as usize).saturating_sub(left_width + right_width);
-        tool_spans.push(Span::raw(" ".repeat(padding)));
-        tool_spans.extend(right_spans);
+    } else if has_segments {
+        let n = app.current_tool_calls.len();
+        tool_spans.push(Span::styled(format!(" \u{00b7} {} done", n), app.theme.dim));
+    }
 
-        lines.push(Line::from(tool_spans));
-        line_to_tool.push(None);
-    } else {
-        let blink_on = (app.tick_count / 30).is_multiple_of(2);
-        let dot_char = if blink_on { "\u{00b7}" } else { " " };
-        let mut dot_spans = vec![
-            Span::raw(pad.to_string()),
-            Span::styled(dot_char.to_string(), app.theme.streaming_dot),
-        ];
-        let mut right_spans: Vec<Span<'static>> = Vec::new();
-        if let Some(elapsed) = app.streaming_elapsed_secs()
-            && elapsed > 3.0
-        {
-            right_spans.push(Span::styled(format!(" {}s", elapsed as u64), app.theme.dim));
+    let mut right_spans: Vec<Span<'static>> = Vec::new();
+    if let Some(elapsed) = app.streaming_elapsed_secs() {
+        right_spans.push(Span::styled(
+            format!(" {}", super::ui::format_elapsed(elapsed)),
+            app.theme.dim,
+        ));
+    }
+    let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
+    let max_left = (width as usize).saturating_sub(right_width + 1);
+    let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
+    if left_width > max_left && max_left > 4 {
+        let mut used = 0usize;
+        let mut truncated: Vec<Span<'static>> = Vec::new();
+        for span in tool_spans {
+            let chars: Vec<char> = span.content.chars().collect();
+            if used + chars.len() <= max_left {
+                used += chars.len();
+                truncated.push(span);
+            } else {
+                let take = max_left.saturating_sub(used + 1);
+                if take > 0 {
+                    let s: String = chars.into_iter().take(take).collect();
+                    let _ = used + take + 1;
+                    truncated.push(Span::styled(format!("{}\u{2026}", s), span.style));
+                }
+                break;
+            }
         }
-        let left_width: usize = dot_spans.iter().map(|s| s.content.chars().count()).sum();
-        let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
-        let padding = (width as usize).saturating_sub(left_width + right_width);
-        dot_spans.push(Span::raw(" ".repeat(padding)));
-        dot_spans.extend(right_spans);
-        let has_live_thinking = !app.current_thinking.is_empty();
-        lines.push(Line::from(dot_spans));
-        line_to_tool.push(None);
-        if has_live_thinking && app.thinking_expanded {
-            let thinking = app.current_thinking.clone();
-            let prefix = format!("{}\u{2502} ", pad);
-            let prefix_chars = prefix.chars().count();
-            let content_width = (width as usize).saturating_sub(prefix_chars);
-            let thinking_style = ratatui::style::Style::default()
-                .fg(app.theme.muted_fg)
-                .add_modifier(ratatui::style::Modifier::ITALIC);
-            for text_line in thinking.lines() {
-                let chars: Vec<char> = text_line.chars().collect();
-                if content_width == 0 || chars.len() <= content_width {
+        tool_spans = truncated;
+    }
+    let left_width: usize = tool_spans.iter().map(|s| s.content.chars().count()).sum();
+    let padding = (width as usize).saturating_sub(left_width + right_width);
+    tool_spans.push(Span::raw(" ".repeat(padding)));
+    tool_spans.extend(right_spans);
+
+    lines.push(Line::from(tool_spans));
+    line_to_tool.push(None);
+}
+
+fn render_waiting_dot(
+    app: &App,
+    width: u16,
+    pad: &str,
+    lines: &mut Vec<Line<'static>>,
+    line_to_tool: &mut Vec<Option<(usize, usize)>>,
+) {
+    let blink_on = (app.tick_count / 30).is_multiple_of(2);
+    let dot_char = if blink_on { "\u{00b7}" } else { " " };
+    let mut dot_spans = vec![
+        Span::raw(pad.to_string()),
+        Span::styled(dot_char.to_string(), app.theme.streaming_dot),
+    ];
+    let mut right_spans: Vec<Span<'static>> = Vec::new();
+    if let Some(elapsed) = app.streaming_elapsed_secs()
+        && elapsed > 3.0
+    {
+        right_spans.push(Span::styled(format!(" {}s", elapsed as u64), app.theme.dim));
+    }
+    let left_width: usize = dot_spans.iter().map(|s| s.content.chars().count()).sum();
+    let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
+    let padding = (width as usize).saturating_sub(left_width + right_width);
+    dot_spans.push(Span::raw(" ".repeat(padding)));
+    dot_spans.extend(right_spans);
+    let has_live_thinking = !app.current_thinking.is_empty();
+    lines.push(Line::from(dot_spans));
+    line_to_tool.push(None);
+    if has_live_thinking && app.thinking_expanded {
+        let thinking = app.current_thinking.clone();
+        let prefix = format!("{}\u{2502} ", pad);
+        let prefix_chars = prefix.chars().count();
+        let content_width = (width as usize).saturating_sub(prefix_chars);
+        let thinking_style = ratatui::style::Style::default()
+            .fg(app.theme.muted_fg)
+            .add_modifier(ratatui::style::Modifier::ITALIC);
+        for text_line in thinking.lines() {
+            let chars: Vec<char> = text_line.chars().collect();
+            if content_width == 0 || chars.len() <= content_width {
+                lines.push(Line::from(vec![
+                    Span::styled(prefix.clone(), app.theme.thinking),
+                    Span::styled(text_line.to_string(), thinking_style),
+                ]));
+                line_to_tool.push(None);
+            } else {
+                for chunk in chars.chunks(content_width) {
                     lines.push(Line::from(vec![
                         Span::styled(prefix.clone(), app.theme.thinking),
-                        Span::styled(text_line.to_string(), thinking_style),
+                        Span::styled(chunk.iter().collect::<String>(), thinking_style),
                     ]));
                     line_to_tool.push(None);
-                } else {
-                    for chunk in chars.chunks(content_width) {
-                        lines.push(Line::from(vec![
-                            Span::styled(prefix.clone(), app.theme.thinking),
-                            Span::styled(chunk.iter().collect::<String>(), thinking_style),
-                        ]));
-                        line_to_tool.push(None);
-                    }
                 }
             }
         }
+    }
+}
+
+pub fn render_streaming_tail(
+    app: &App,
+    width: u16,
+    lines: &mut Vec<Line<'static>>,
+    line_to_tool: &mut Vec<Option<(usize, usize)>>,
+    stream_msg_idx: usize,
+    prev_was_tool: bool,
+    _tool_idx_base: usize,
+) {
+    let compact = width < 55;
+    let pad = if compact { " " } else { "  " };
+    let pad_cols: u16 = if compact { 1 } else { 2 };
+    let has_segments = !app.streaming_segments.is_empty();
+    let has_text = !app.current_response.is_empty();
+    let has_tool = app.pending_tool_name.is_some();
+
+    if has_text {
+        if prev_was_tool {
+            lines.push(Line::from(""));
+            line_to_tool.push(None);
+        }
+        let md_lines = markdown::render_markdown(
+            &app.current_response,
+            &app.theme,
+            width.saturating_sub(pad_cols),
+        );
+        for line in md_lines {
+            let bg = line.spans.first().and_then(|s| s.style.bg);
+            let mut padded = vec![Span::raw(pad.to_string())];
+            padded.extend(line.spans);
+            if let Some(c) = bg {
+                let used: usize = padded.iter().map(|s| s.content.chars().count()).sum();
+                let target = width as usize;
+                if used < target {
+                    padded.push(Span::styled(
+                        " ".repeat(target - used),
+                        Style::default().bg(c),
+                    ));
+                }
+            }
+            lines.push(Line::from(padded));
+            line_to_tool.push(None);
+        }
+    } else if has_tool {
+        render_tool_in_progress(
+            app,
+            width,
+            pad,
+            has_segments,
+            lines,
+            line_to_tool,
+            stream_msg_idx,
+        );
+    } else {
+        render_waiting_dot(app, width, pad, lines, line_to_tool);
     }
 }
 

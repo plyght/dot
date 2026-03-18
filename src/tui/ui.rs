@@ -318,16 +318,61 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
         if app.is_streaming {
             let stream_msg_idx = app.messages.len();
-            ui_tools::render_streaming_state(
-                app,
-                wrap_width,
-                &mut all_lines,
-                &mut line_to_tool,
-                stream_msg_idx,
-            );
-            let added = all_lines.len() - tail_start;
-            for _ in 0..added {
+            let seg_count = app.streaming_segments.len();
+            let can_reuse_segs = app
+                .segment_cache
+                .as_ref()
+                .is_some_and(|sc| sc.segment_count == seg_count && sc.width == wrap_width);
+
+            if can_reuse_segs {
+                let sc = app.segment_cache.as_ref().unwrap();
+                all_lines.push(Line::from(""));
+                line_to_tool.push(None);
                 line_to_msg.push(stream_msg_idx);
+                let seg_added = sc.lines.len();
+                all_lines.extend(sc.lines.iter().cloned());
+                line_to_tool.extend(sc.line_to_tool.iter().cloned());
+                for _ in 0..seg_added {
+                    line_to_msg.push(stream_msg_idx);
+                }
+                ui_tools::render_streaming_tail(
+                    app,
+                    wrap_width,
+                    &mut all_lines,
+                    &mut line_to_tool,
+                    stream_msg_idx,
+                    sc.prev_was_tool,
+                    sc.tool_idx_base,
+                );
+                let added = all_lines.len() - tail_start;
+                let already = 1 + seg_added;
+                for _ in already..added {
+                    line_to_msg.push(stream_msg_idx);
+                }
+            } else {
+                let (seg_boundary, seg_prev_was_tool, seg_tool_idx_base) =
+                    ui_tools::render_streaming_state(
+                        app,
+                        wrap_width,
+                        &mut all_lines,
+                        &mut line_to_tool,
+                        stream_msg_idx,
+                    );
+                let added = all_lines.len() - tail_start;
+                for _ in 0..added {
+                    line_to_msg.push(stream_msg_idx);
+                }
+                let seg_lines_start = tail_start + 1;
+                if seg_count > 0 && seg_boundary > seg_lines_start {
+                    app.segment_cache = Some(crate::tui::app::SegmentCache {
+                        lines: all_lines[seg_lines_start..seg_boundary].to_vec(),
+                        line_to_tool: line_to_tool[seg_lines_start..seg_boundary].to_vec(),
+                        segment_count: seg_count,
+                        width: wrap_width,
+                        prev_was_tool: seg_prev_was_tool,
+                        tool_idx_base: seg_tool_idx_base,
+                    });
+                }
             }
         }
 
@@ -495,23 +540,11 @@ fn render_message(
 
     match msg.role.as_str() {
         "user" => {
-            if msg_idx > 0 {
-                let sep_width = ctx.inner_width.saturating_sub(4) as usize;
-                if sep_width > 0 {
-                    lines.push(Line::from(vec![
-                        Span::raw(body_indent),
-                        Span::styled("\u{2500}".repeat(sep_width), ctx.theme.message_separator),
-                    ]));
-                    line_to_tool.push(None);
-                }
-            }
-
-            let w = ctx.inner_width as usize;
-            let right_pad = 2usize;
-            let left_indent = body_indent_cols as usize;
-            let content_width = w.saturating_sub(left_indent + right_pad);
-            let user_style = ctx.theme.user_text.add_modifier(Modifier::BOLD);
-            let chip_style = ctx.theme.dim;
+            let bg = ctx.theme.user_text_bg;
+            let bg_style = Style::default().bg(bg);
+            let user_style = ctx.theme.user_text.add_modifier(Modifier::BOLD).bg(bg);
+            let chip_style = ctx.theme.dim.bg(bg);
+            let content_width = ctx.inner_width.saturating_sub(body_indent_cols + 2);
             let chips: Vec<InputChip> = msg
                 .chips
                 .clone()
@@ -526,21 +559,19 @@ fn render_message(
                     byte_offset += 1;
                 }
                 let content_line = Line::from(line_spans.clone());
-                let wrapped = char_wrap(vec![content_line], content_width as u16);
+                let wrapped = char_wrap(vec![content_line], content_width);
                 for row in wrapped {
                     line_to_tool.push(None);
                     let row_chars: usize =
                         row.spans.iter().map(|s| s.content.chars().count()).sum();
-                    let left = w.saturating_sub(left_indent + row_chars + right_pad);
-                    let mut line_vec = vec![Span::raw(body_indent), Span::raw(" ".repeat(left))];
+                    let row_width = (content_width as usize).saturating_sub(row_chars);
+                    let mut line_vec = vec![Span::raw(body_indent)];
                     line_vec.extend(row.spans);
-                    line_vec.push(Span::raw(" ".repeat(right_pad)));
+                    if row_width > 0 {
+                        line_vec.push(Span::styled(" ".repeat(row_width), bg_style));
+                    }
                     lines.push(Line::from(line_vec));
                 }
-            }
-            if line_count > 1 {
-                lines.push(Line::from(""));
-                line_to_tool.push(None);
             }
             line_to_tool.push(None);
         }
@@ -693,7 +724,7 @@ fn render_thinking_block(
     msg_idx: usize,
     width: u16,
 ) {
-    let pad = if compact { "  " } else { "    " };
+    let pad = if compact { " " } else { "  " };
     let prefix = format!("{}\u{2502} ", pad);
     let prefix_chars = prefix.chars().count();
     let word_count = thinking.split_whitespace().count();
